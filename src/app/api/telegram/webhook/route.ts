@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getBot } from "@/services/bot";
 import { env } from "@/lib/env";
-import { createHash } from "crypto";
+
+// Force dynamic rendering — this route must never be statically evaluated at build time
+export const dynamic = "force-dynamic";
 
 /**
  * Telegram sends POST requests to this endpoint when the webhook is set.

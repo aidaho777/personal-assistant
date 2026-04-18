@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { checkDbConnection } from "@/services/user-service";
 import { checkDriveConnection } from "@/services/google-drive";
 
+// Force dynamic rendering — requires live DB and Drive connections
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const [dbOk, driveOk] = await Promise.all([
     checkDbConnection(),
