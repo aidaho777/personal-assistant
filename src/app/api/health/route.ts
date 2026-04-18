@@ -11,17 +11,21 @@ export async function GET() {
     checkDriveConnection(),
   ]);
 
-  const healthy = dbOk && driveOk;
+  // "healthy" = all services ok
+  // "degraded" = DB ok but Drive not configured (acceptable for partial deployment)
+  // "unhealthy" = DB is down (critical failure)
+  const status = dbOk && driveOk ? "healthy" : dbOk ? "degraded" : "unhealthy";
+  const httpStatus = dbOk ? 200 : 503;
 
   return NextResponse.json(
     {
-      status: healthy ? "healthy" : "degraded",
+      status,
       services: {
         database: dbOk ? "ok" : "error",
         googleDrive: driveOk ? "ok" : "error",
       },
       timestamp: new Date().toISOString(),
     },
-    { status: healthy ? 200 : 503 }
+    { status: httpStatus }
   );
 }
