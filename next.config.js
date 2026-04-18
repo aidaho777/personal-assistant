@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Standalone output for Railway/Docker deployment
+  output: 'standalone',
+
   // Allow large payloads for Telegram webhook (files up to 20 MB + overhead)
   experimental: {
     serverActions: {
