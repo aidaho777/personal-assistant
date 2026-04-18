@@ -1,48 +1,69 @@
 /**
- * Smart launcher — checks TELEGRAM_USE_POLLING env var.
- * If true: starts bot in long-polling mode (no webhook needed).
- * If false/unset: starts Next.js web server (webhook mode).
+ * Smart launcher — runs Next.js web server AND polling bot simultaneously.
+ * 
+ * When TELEGRAM_USE_POLLING=true:
+ *   - Starts Next.js on PORT (for Railway healthcheck & health endpoint)
+ *   - Also starts Telegram long-polling bot as a child process
+ * 
+ * When TELEGRAM_USE_POLLING is not set:
+ *   - Starts only Next.js (webhook mode — bot receives updates via POST)
  */
-const { execSync, spawn } = require("child_process");
+const { spawn } = require("child_process");
 const path = require("path");
 
 const usePolling = process.env.TELEGRAM_USE_POLLING === "true";
+const port = process.env.PORT || "3000";
 
-if (usePolling) {
-  console.log("🔄 TELEGRAM_USE_POLLING=true — starting in Long Polling mode");
-  console.log("   Next.js web server will NOT be started.");
-  console.log("   Bot will poll Telegram API directly.\n");
+console.log(`🚀 Starting Collector Bot...`);
+console.log(`   Mode: ${usePolling ? "Long Polling + Web" : "Webhook (Web only)"}`);
+console.log(`   Port: ${port}`);
 
-  const pollingScript = path.join(__dirname, "polling.ts");
-  const child = spawn("npx", ["tsx", pollingScript], {
-    stdio: "inherit",
-    env: process.env,
-  });
-
-  child.on("exit", (code) => {
-    console.log(`Polling process exited with code ${code}`);
-    process.exit(code || 0);
-  });
-
-  process.once("SIGINT", () => child.kill("SIGINT"));
-  process.once("SIGTERM", () => child.kill("SIGTERM"));
-} else {
-  console.log("🌐 TELEGRAM_USE_POLLING not set — starting Next.js web server (webhook mode)");
-
-  const child = spawn("node", [".next/standalone/server.js"], {
+// ─── Start Next.js web server (always) ─────────────────────────────────────
+const nextServer = spawn(
+  "node",
+  [path.join(__dirname, "../.next/standalone/server.js")],
+  {
     stdio: "inherit",
     env: {
       ...process.env,
-      PORT: process.env.PORT || "3000",
+      PORT: port,
       HOSTNAME: "0.0.0.0",
     },
-  });
+  }
+);
 
-  child.on("exit", (code) => {
-    console.log(`Next.js process exited with code ${code}`);
-    process.exit(code || 0);
-  });
+nextServer.on("exit", (code) => {
+  console.log(`Next.js exited with code ${code}`);
+  process.exit(code || 0);
+});
 
-  process.once("SIGINT", () => child.kill("SIGINT"));
-  process.once("SIGTERM", () => child.kill("SIGTERM"));
+// ─── Start polling bot (only when TELEGRAM_USE_POLLING=true) ───────────────
+if (usePolling) {
+  // Wait a few seconds for Next.js to initialize before starting polling
+  setTimeout(() => {
+    console.log("🤖 Starting Telegram polling bot...");
+    const pollingScript = path.join(__dirname, "polling.ts");
+    const pollingBot = spawn("npx", ["tsx", pollingScript], {
+      stdio: "inherit",
+      env: process.env,
+    });
+
+    pollingBot.on("exit", (code) => {
+      console.log(`Polling bot exited with code ${code}`);
+      // Don't exit main process — Next.js is still running
+    });
+
+    process.once("SIGTERM", () => pollingBot.kill("SIGTERM"));
+    process.once("SIGINT", () => pollingBot.kill("SIGINT"));
+  }, 5000);
 }
+
+// ─── Graceful shutdown ──────────────────────────────────────────────────────
+process.once("SIGTERM", () => {
+  console.log("Shutting down...");
+  nextServer.kill("SIGTERM");
+});
+process.once("SIGINT", () => {
+  console.log("Shutting down...");
+  nextServer.kill("SIGINT");
+});
