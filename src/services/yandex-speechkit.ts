@@ -16,7 +16,7 @@ export async function recognizeSpeech(audioBuffer: Buffer): Promise<string> {
       "Authorization": `Api-Key ${env.YANDEX_CLOUD_API_KEY}`,
       "Content-Type": "audio/ogg",
     },
-    body: audioBuffer,
+    body: new Uint8Array(audioBuffer),
   });
 
   if (!response.ok) {

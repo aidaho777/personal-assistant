@@ -17,7 +17,7 @@ async function recognizeSpeech(audioBuffer) {
             "Authorization": `Api-Key ${env_1.env.YANDEX_CLOUD_API_KEY}`,
             "Content-Type": "audio/ogg",
         },
-        body: audioBuffer,
+        body: new Uint8Array(audioBuffer),
     });
     if (!response.ok) {
         const errorText = await response.text();
