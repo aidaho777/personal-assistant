@@ -62,6 +62,8 @@ async function getOrCreateFolder(folderName) {
         q: query,
         fields: "files(id, name)",
         spaces: "drive",
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
     });
     if (res.data.files && res.data.files.length > 0) {
         const id = res.data.files[0].id;
@@ -76,6 +78,7 @@ async function getOrCreateFolder(folderName) {
             parents: [rootId],
         },
         fields: "id",
+        supportsAllDrives: true,
     });
     const id = created.data.id;
     folderCache.set(folderName, id);
@@ -100,6 +103,7 @@ async function uploadFileToDrive(buffer, fileName, mimeType, folderId) {
             body: readable,
         },
         fields: "id, webViewLink",
+        supportsAllDrives: true,
     });
     return {
         fileId: file.data.id,
@@ -114,7 +118,11 @@ async function uploadFileToDrive(buffer, fileName, mimeType, folderId) {
 async function checkDriveConnection() {
     try {
         const drive = getDrive();
-        await drive.files.get({ fileId: env_1.env.GOOGLE_DRIVE_ROOT_FOLDER_ID, fields: "id" });
+        await drive.files.get({
+            fileId: env_1.env.GOOGLE_DRIVE_ROOT_FOLDER_ID,
+            fields: "id",
+            supportsAllDrives: true,
+        });
         return true;
     }
     catch (_a) {

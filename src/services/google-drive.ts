@@ -64,6 +64,8 @@ export async function getOrCreateFolder(folderName: string): Promise<string> {
     q: query,
     fields: "files(id, name)",
     spaces: "drive",
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   if (res.data.files && res.data.files.length > 0) {
@@ -80,6 +82,7 @@ export async function getOrCreateFolder(folderName: string): Promise<string> {
       parents: [rootId],
     },
     fields: "id",
+    supportsAllDrives: true,
   });
 
   const id = created.data.id!;
@@ -120,6 +123,7 @@ export async function uploadFileToDrive(
       body: readable,
     },
     fields: "id, webViewLink",
+    supportsAllDrives: true,
   });
 
   return {
@@ -137,7 +141,11 @@ export async function uploadFileToDrive(
 export async function checkDriveConnection(): Promise<boolean> {
   try {
     const drive = getDrive();
-    await drive.files.get({ fileId: env.GOOGLE_DRIVE_ROOT_FOLDER_ID, fields: "id" });
+    await drive.files.get({
+      fileId: env.GOOGLE_DRIVE_ROOT_FOLDER_ID,
+      fields: "id",
+      supportsAllDrives: true,
+    });
     return true;
   } catch {
     return false;
