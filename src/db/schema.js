@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.uploads = exports.users = void 0;
+exports.webUsers = exports.uploads = exports.users = void 0;
 const pg_core_1 = require("drizzle-orm/pg-core");
 // ─── users table (whitelist) ───────────────────────────────────────────
 exports.users = (0, pg_core_1.pgTable)("users", {
@@ -38,3 +38,15 @@ exports.uploads = (0, pg_core_1.pgTable)("uploads", {
     tagIdx: (0, pg_core_1.index)("uploads_tag_idx").on(table.tag),
     createdAtIdx: (0, pg_core_1.index)("uploads_created_at_idx").on(table.createdAt),
 }));
+// ─── web_users table (web dashboard auth) ─────────────────────────────
+exports.webUsers = (0, pg_core_1.pgTable)("web_users", {
+    id: (0, pg_core_1.uuid)("id").defaultRandom().primaryKey(),
+    email: (0, pg_core_1.varchar)("email", { length: 255 }).notNull().unique(),
+    name: (0, pg_core_1.varchar)("name", { length: 128 }),
+    passwordHash: (0, pg_core_1.varchar)("password_hash", { length: 255 }),
+    avatarUrl: (0, pg_core_1.text)("avatar_url"),
+    role: (0, pg_core_1.varchar)("role", { length: 16 }).notNull().default("user"),
+    telegramUserId: (0, pg_core_1.uuid)("telegram_user_id").references(() => exports.users.id),
+    createdAt: (0, pg_core_1.timestamp)("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastLoginAt: (0, pg_core_1.timestamp)("last_login_at", { withTimezone: true }),
+});

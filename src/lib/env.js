@@ -25,6 +25,11 @@ exports.env = {
     get YANDEX_CLOUD_FOLDER_ID() { return requireEnv("YANDEX_CLOUD_FOLDER_ID"); },
     // Database
     get DATABASE_URL() { return requireEnv("DATABASE_URL"); },
+    // NextAuth
+    get NEXTAUTH_SECRET() { return requireEnv("NEXTAUTH_SECRET"); },
+    get NEXTAUTH_URL() { var _a; return (_a = process.env.NEXTAUTH_URL) !== null && _a !== void 0 ? _a : "http://localhost:3000"; },
+    get GOOGLE_OAUTH_CLIENT_ID() { return requireEnv("GOOGLE_OAUTH_CLIENT_ID"); },
+    get GOOGLE_OAUTH_CLIENT_SECRET() { return requireEnv("GOOGLE_OAUTH_CLIENT_SECRET"); },
     // App
     get APP_URL() { var _a; return (_a = process.env.NEXT_PUBLIC_APP_URL) !== null && _a !== void 0 ? _a : "http://localhost:3000"; },
 };
