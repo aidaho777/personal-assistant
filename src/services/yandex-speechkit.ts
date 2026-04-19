@@ -1,6 +1,20 @@
 import { env } from "../lib/env";
 
 /**
+ * Check Yandex SpeechKit connectivity by verifying env vars are set.
+ * We don't make a real API call to avoid costs — just validate config.
+ */
+export function checkSpeechKitConnection(): boolean {
+  try {
+    const apiKey = env.YANDEX_CLOUD_API_KEY;
+    const folderId = env.YANDEX_CLOUD_FOLDER_ID;
+    return !!(apiKey && folderId);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Recognize speech using Yandex SpeechKit synchronous API.
  * https://yandex.cloud/ru/docs/speechkit/stt/request
  * 

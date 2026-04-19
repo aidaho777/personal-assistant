@@ -1,7 +1,22 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.checkSpeechKitConnection = checkSpeechKitConnection;
 exports.recognizeSpeech = recognizeSpeech;
 const env_1 = require("../lib/env");
+/**
+ * Check Yandex SpeechKit connectivity by verifying env vars are set.
+ * We don't make a real API call to avoid costs — just validate config.
+ */
+function checkSpeechKitConnection() {
+    try {
+        const apiKey = env_1.env.YANDEX_CLOUD_API_KEY;
+        const folderId = env_1.env.YANDEX_CLOUD_FOLDER_ID;
+        return !!(apiKey && folderId);
+    }
+    catch (_a) {
+        return false;
+    }
+}
 /**
  * Recognize speech using Yandex SpeechKit synchronous API.
  * https://yandex.cloud/ru/docs/speechkit/stt/request
