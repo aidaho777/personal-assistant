@@ -35,6 +35,10 @@
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "src/services",
+    "src/lib",
+    "src/db",
+    "scripts"
   ]
 }
