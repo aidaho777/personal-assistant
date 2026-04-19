@@ -1,78 +1,66 @@
-/**
- * Smart launcher — runs Next.js web server AND polling bot simultaneously.
- * 
- * When TELEGRAM_USE_POLLING=true:
- *   - Starts Next.js on PORT (for Railway healthcheck & health endpoint)
- *   - Also starts Telegram long-polling bot as a child process
- * 
- * When TELEGRAM_USE_POLLING is not set:
- *   - Starts only Next.js (webhook mode — bot receives updates via POST)
- */
 const { spawn } = require("child_process");
 const path = require("path");
 
 const usePolling = process.env.TELEGRAM_USE_POLLING === "true";
 const port = process.env.PORT || "3000";
 
-console.log(`🚀 Starting Collector Bot...`);
-console.log(`   Mode: ${usePolling ? "Long Polling + Web" : "Webhook (Web only)"}`);
-console.log(`   Port: ${port}`);
+console.log("🚀 Starting Collector Bot...");
+console.log("   Mode: " + (usePolling ? "Long Polling + Web" : "Webhook (Web only)"));
+console.log("   Port: " + port);
 
-// ─── Start Next.js web server (always) ─────────────────────────────────────
+// ─── Start Next.js web server using `next start` ──────────────────────────
 const nextServer = spawn(
-  "node",
-  [path.join(__dirname, "../.next/standalone/server.js")],
+  "npx",
+  ["next", "start", "-p", port, "-H", "0.0.0.0"],
   {
     stdio: "inherit",
-    env: {
-      ...process.env,
-      PORT: port,
-      HOSTNAME: "0.0.0.0",
-    },
+    env: { ...process.env, PORT: port },
   }
 );
 
-nextServer.on("exit", (code) => {
-  console.log(`Next.js exited with code ${code}`);
+nextServer.on("exit", function (code) {
+  console.log("Next.js exited with code " + code);
   process.exit(code || 0);
 });
 
 // ─── Start polling bot (only when TELEGRAM_USE_POLLING=true) ───────────────
 if (usePolling) {
-  // Use tsx to run TypeScript directly — no compiled JS needed, resolves @/ aliases natively
-  const tsxBin = path.join(__dirname, "../node_modules/.bin/tsx");
-  const pollingScript = path.join(__dirname, "polling.ts");
+  var tsxBin = path.join(__dirname, "../node_modules/.bin/tsx");
+  var pollingScript = path.join(__dirname, "polling.ts");
 
   function spawnPolling(label) {
-    console.log(`🤖 ${label}`);
-    const bot = spawn(tsxBin, [pollingScript], {
+    console.log("🤖 " + label);
+    var bot = spawn(tsxBin, [pollingScript], {
       stdio: "inherit",
       env: process.env,
     });
 
-    bot.on("exit", (code) => {
-      console.log(`Polling bot exited with code ${code}`);
+    bot.on("exit", function (code) {
+      console.log("Polling bot exited with code " + code);
       if (code !== 0) {
         console.log("🔄 Polling bot crashed. Restarting in 15s...");
-        setTimeout(() => spawnPolling("Restarting Telegram polling bot..."), 15000);
+        setTimeout(function () {
+          spawnPolling("Restarting Telegram polling bot...");
+        }, 15000);
       }
     });
 
-    process.once("SIGTERM", () => bot.kill("SIGTERM"));
-    process.once("SIGINT", () => bot.kill("SIGINT"));
+    process.once("SIGTERM", function () { bot.kill("SIGTERM"); });
+    process.once("SIGINT", function () { bot.kill("SIGINT"); });
     return bot;
   }
 
-  // Wait a few seconds for Next.js to initialize before starting polling
-  setTimeout(() => spawnPolling("Starting Telegram polling bot..."), 5000);
+  setTimeout(function () {
+    spawnPolling("Starting Telegram polling bot...");
+  }, 5000);
 }
 
 // ─── Graceful shutdown ──────────────────────────────────────────────────────
-process.once("SIGTERM", () => {
+process.once("SIGTERM", function () {
   console.log("Shutting down...");
   nextServer.kill("SIGTERM");
 });
-process.once("SIGINT", () => {
+process.once("SIGINT", function () {
   console.log("Shutting down...");
   nextServer.kill("SIGINT");
 });
