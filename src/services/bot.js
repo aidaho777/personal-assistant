@@ -8,6 +8,7 @@ const user_service_1 = require("./user-service");
 const upload_service_1 = require("./upload-service");
 const google_drive_1 = require("./google-drive");
 const helpers_1 = require("../lib/helpers");
+const yandex_speechkit_1 = require("./yandex-speechkit");
 // ─── Bot singleton ──────────────────────────────────────────────────────
 let bot = null;
 function getBot() {
@@ -227,19 +228,43 @@ async function processFile(ctx, user, input) {
         // Upload to Drive
         const folderId = await (0, google_drive_1.getOrCreateFolder)(tag);
         const result = await (0, google_drive_1.uploadFileToDrive)(buffer, fileName, mimeType, folderId);
+        let transcriptionText = "";
+        if (input.contentType === "voice") {
+            try {
+                transcriptionText = await (0, yandex_speechkit_1.recognizeSpeech)(buffer);
+            }
+            catch (sttErr) {
+                console.error("[Collector] SpeechKit error:", sttErr);
+                transcriptionText = "⚠️ Ошибка распознавания речи";
+            }
+            // If we have a transcription, save it as a text file next to the audio
+            if (transcriptionText && !transcriptionText.startsWith("⚠️")) {
+                try {
+                    const txtName = fileName.replace(".ogg", ".txt");
+                    const txtBuffer = Buffer.from(transcriptionText, "utf-8");
+                    await (0, google_drive_1.uploadFileToDrive)(txtBuffer, txtName, "text/plain", folderId);
+                }
+                catch (uploadErr) {
+                    console.error("[Collector] Error uploading transcription:", uploadErr);
+                }
+            }
+        }
         // Update DB record
         await (0, upload_service_1.updateUploadRecord)(record.id, {
             driveFileId: result.fileId,
             driveFolderId: result.folderId,
             driveUrl: result.webViewLink,
             fileMd5: hash,
+            transcription: transcriptionText || undefined,
             status: "success",
         });
         // Reply with success
         const sizeStr = input.fileSize > 0 ? ` (${(0, helpers_1.formatSize)(input.fileSize)})` : "";
-        await ctx.reply(`✅ Файл сохранён в папку \`${tag}\`${sizeStr}\n` +
-            `📄 \`${fileName}\`\n` +
-            `🔗 [Открыть в Drive](${result.webViewLink})`, { parse_mode: "Markdown", link_preview_options: { is_disabled: true } });
+        let replyText = `✅ Файл сохранён в папку \`${tag}\`${sizeStr}\n📄 \`${fileName}\`\n🔗 [Открыть в Drive](${result.webViewLink})`;
+        if (input.contentType === "voice" && transcriptionText) {
+            replyText += `\n\n📝 *Распознанный текст:*\n_${transcriptionText}_`;
+        }
+        await ctx.reply(replyText, { parse_mode: "Markdown", link_preview_options: { is_disabled: true } });
     }
     catch (err) {
         const errMsg = err instanceof Error ? err.message : "Unknown error";

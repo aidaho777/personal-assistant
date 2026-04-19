@@ -30,6 +30,7 @@ exports.uploads = (0, pg_core_1.pgTable)("uploads", {
     fileMd5: (0, pg_core_1.varchar)("file_md5", { length: 32 }), // for deduplication
     status: (0, pg_core_1.varchar)("status", { length: 16 }).notNull().default("pending"), // 'success' | 'error' | 'pending'
     errorMessage: (0, pg_core_1.text)("error_message"),
+    transcription: (0, pg_core_1.text)("transcription"), // For voice messages
     createdAt: (0, pg_core_1.timestamp)("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
     userIdIdx: (0, pg_core_1.index)("uploads_user_id_idx").on(table.userId),

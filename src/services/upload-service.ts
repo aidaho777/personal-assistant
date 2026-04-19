@@ -17,7 +17,7 @@ export async function createUploadRecord(data: NewUpload) {
  */
 export async function updateUploadRecord(
   id: string,
-  data: Partial<Pick<NewUpload, "driveFileId" | "driveFolderId" | "driveUrl" | "status" | "errorMessage" | "fileMd5">>
+  data: Partial<Pick<NewUpload, "driveFileId" | "driveFolderId" | "driveUrl" | "status" | "errorMessage" | "fileMd5" | "transcription">>
 ) {
   const [record] = await db
     .update(uploads)

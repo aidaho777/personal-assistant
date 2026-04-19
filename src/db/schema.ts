@@ -41,6 +41,7 @@ export const uploads = pgTable(
     fileMd5: varchar("file_md5", { length: 32 }), // for deduplication
     status: varchar("status", { length: 16 }).notNull().default("pending"), // 'success' | 'error' | 'pending'
     errorMessage: text("error_message"),
+    transcription: text("transcription"), // For voice messages
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
