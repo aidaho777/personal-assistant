@@ -234,8 +234,9 @@ async function processFile(ctx, user, input) {
                 transcriptionText = await (0, yandex_speechkit_1.recognizeSpeech)(buffer);
             }
             catch (sttErr) {
-                console.error("[Collector] SpeechKit error:", sttErr);
-                transcriptionText = "⚠️ Ошибка распознавания речи";
+                const sttErrMsg = sttErr instanceof Error ? sttErr.message : String(sttErr);
+                console.error("[Collector] SpeechKit error:", sttErrMsg);
+                transcriptionText = `⚠️ Ошибка распознавания речи: ${sttErrMsg}`;
             }
             // If we have a transcription, save it as a text file next to the audio
             if (transcriptionText && !transcriptionText.startsWith("⚠️")) {
