@@ -13,7 +13,7 @@ export const authConfig: NextAuthConfig = {
       const { pathname } = request.nextUrl;
 
       const publicPaths = ["/login", "/register"];
-      const isPublic = publicPaths.some(p => pathname.startsWith(p));
+      const isPublic = pathname === "/" || publicPaths.some(p => pathname.startsWith(p));
       const isApiAuth = pathname.startsWith("/api/auth");
       const isBotApi = pathname.startsWith("/api/telegram") || pathname.startsWith("/api/health");
 

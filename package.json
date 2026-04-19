@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build && cp -r .next/static .next/standalone/.next/static && (cp -r public .next/standalone/public 2>/dev/null || true) && npx tsc --project tsconfig.polling.json && npx tsc-alias --project tsconfig.polling.json",
+    "build": "next build && npx tsc --project tsconfig.polling.json && npx tsc-alias --project tsconfig.polling.json",
     "start": "node scripts/start.js",
     "start:web": "next start",
     "start:polling": "tsx scripts/polling.ts",
