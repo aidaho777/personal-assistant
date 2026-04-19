@@ -11,12 +11,21 @@
     "resolveJsonModule": true,
     "outDir": ".",
     "rootDir": ".",
+    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     }
   },
   "include": [
-    "scripts/polling.ts"
+    "scripts/polling.ts",
+    "src/services/bot.ts",
+    "src/services/google-drive.ts",
+    "src/services/user-service.ts",
+    "src/services/upload-service.ts",
+    "src/lib/env.ts",
+    "src/lib/helpers.ts",
+    "src/db/index.ts",
+    "src/db/schema.ts"
   ],
   "exclude": [
     "node_modules"

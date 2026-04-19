@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build && npx tsc --project tsconfig.polling.json",
+    "build": "next build && npx tsc --project tsconfig.polling.json && npx tsc-alias --project tsconfig.polling.json",
     "start": "node scripts/start.js",
     "start:web": "next start",
     "start:polling": "node scripts/polling.js",
@@ -15,21 +15,22 @@
     "set-webhook": "tsx scripts/set-webhook.ts"
   },
   "dependencies": {
+    "crypto": "^1.0.1",
+    "dotenv": "^16.4.0",
+    "drizzle-orm": "^0.30.0",
+    "googleapis": "^134.0.0",
     "next": "^14.2.0",
+    "postgres": "^3.4.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "telegraf": "^4.16.0",
-    "googleapis": "^134.0.0",
-    "drizzle-orm": "^0.30.0",
-    "postgres": "^3.4.0",
-    "dotenv": "^16.4.0",
-    "crypto": "^1.0.1"
+    "telegraf": "^4.16.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/react": "^18.3.0",
-    "typescript": "^5.4.0",
     "drizzle-kit": "^0.21.0",
-    "tsx": "^4.0.0"
+    "tsc-alias": "^1.8.16",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
   }
 }
