@@ -39,34 +39,32 @@ nextServer.on("exit", (code) => {
 
 // ─── Start polling bot (only when TELEGRAM_USE_POLLING=true) ───────────────
 if (usePolling) {
-  // Wait a few seconds for Next.js to initialize before starting polling
-  setTimeout(() => {
-    console.log("🤖 Starting Telegram polling bot...");
-    const pollingScript = path.join(__dirname, "polling.js");
-    const pollingBot = spawn("node", [pollingScript], {
+  // Use tsx to run TypeScript directly — no compiled JS needed, resolves @/ aliases natively
+  const tsxBin = path.join(__dirname, "../node_modules/.bin/tsx");
+  const pollingScript = path.join(__dirname, "polling.ts");
+
+  function spawnPolling(label) {
+    console.log(`🤖 ${label}`);
+    const bot = spawn(tsxBin, [pollingScript], {
       stdio: "inherit",
       env: process.env,
     });
 
-    pollingBot.on("exit", (code) => {
+    bot.on("exit", (code) => {
       console.log(`Polling bot exited with code ${code}`);
-      // Auto-restart polling bot after 15s if it crashed
       if (code !== 0) {
         console.log("🔄 Polling bot crashed. Restarting in 15s...");
-        setTimeout(() => {
-          console.log("🤖 Restarting Telegram polling bot...");
-          const newBot = spawn("node", [pollingScript], {
-            stdio: "inherit",
-            env: process.env,
-          });
-          newBot.on("exit", (c) => console.log(`Polling bot (restart) exited with code ${c}`));
-        }, 15000);
+        setTimeout(() => spawnPolling("Restarting Telegram polling bot..."), 15000);
       }
     });
 
-    process.once("SIGTERM", () => pollingBot.kill("SIGTERM"));
-    process.once("SIGINT", () => pollingBot.kill("SIGINT"));
-  }, 5000);
+    process.once("SIGTERM", () => bot.kill("SIGTERM"));
+    process.once("SIGINT", () => bot.kill("SIGINT"));
+    return bot;
+  }
+
+  // Wait a few seconds for Next.js to initialize before starting polling
+  setTimeout(() => spawnPolling("Starting Telegram polling bot..."), 5000);
 }
 
 // ─── Graceful shutdown ──────────────────────────────────────────────────────
