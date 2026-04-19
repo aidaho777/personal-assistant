@@ -4,11 +4,35 @@ import { Readable } from "stream";
 
 let driveClient: drive_v3.Drive | null = null;
 
+/**
+ * Parse GOOGLE_SERVICE_ACCOUNT_JSON — supports both raw JSON and base64-encoded JSON.
+ * Base64 encoding is the recommended way to store complex JSON in Railway env vars.
+ */
+function parseServiceAccountJson(raw: string): object {
+  const trimmed = raw.trim();
+  // Try base64 first: if it doesn't start with '{', assume it's base64-encoded
+  if (!trimmed.startsWith('{')) {
+    try {
+      const decoded = Buffer.from(trimmed, 'base64').toString('utf-8');
+      return JSON.parse(decoded);
+    } catch {
+      // fall through to raw parse
+    }
+  }
+  // Raw JSON (possibly with Railway-added quirks — strip outer quotes if present)
+  let s = trimmed;
+  if (s.startsWith('"') && s.endsWith('"')) {
+    // Railway sometimes wraps value in extra quotes
+    s = s.slice(1, -1).replace(/\\"/g, '"').replace(/\\n/g, '\n');
+  }
+  return JSON.parse(s);
+}
+
 /** Lazy-init & cache the Drive client */
 function getDrive(): drive_v3.Drive {
   if (driveClient) return driveClient;
 
-  const credentials = JSON.parse(env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const credentials = parseServiceAccountJson(env.GOOGLE_SERVICE_ACCOUNT_JSON);
   const auth = new google.auth.GoogleAuth({
     credentials,
     scopes: ["https://www.googleapis.com/auth/drive"],
