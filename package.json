@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-"build": "next build && cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public || true && npx tsc --project tsconfig.polling.json && npx tsc-alias --project tsconfig.polling.json",    "start": "node scripts/start.js",
+    "build": "next build && npx tsc --project tsconfig.polling.json && npx tsc-alias --project tsconfig.polling.json",
+    "start": "node scripts/start.js",
     "start:web": "next start",
     "start:polling": "tsx scripts/polling.ts",
     "db:generate": "drizzle-kit generate",
@@ -14,22 +15,30 @@
     "set-webhook": "tsx scripts/set-webhook.ts"
   },
   "dependencies": {
+    "@auth/drizzle-adapter": "^1.11.2",
+    "bcrypt": "^6.0.0",
     "crypto": "^1.0.1",
     "dotenv": "^16.4.0",
     "drizzle-orm": "^0.30.0",
     "googleapis": "^134.0.0",
     "module-alias": "^2.3.4",
     "next": "^14.2.0",
+    "next-auth": "^5.0.0-beta.31",
     "postgres": "^3.4.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
+    "recharts": "^3.8.1",
     "telegraf": "^4.16.0",
     "tsx": "^4.0.0"
   },
   "devDependencies": {
+    "@types/bcrypt": "^6.0.0",
     "@types/node": "^20.0.0",
     "@types/react": "^18.3.0",
+    "autoprefixer": "^10.5.0",
     "drizzle-kit": "^0.21.0",
+    "postcss": "^8.5.10",
+    "tailwindcss": "^3.4.19",
     "tsc-alias": "^1.8.16",
     "typescript": "^5.4.0"
   }
