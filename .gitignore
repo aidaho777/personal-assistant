@@ -17,3 +17,7 @@ out/
 # tsc output pollution prevention
 scripts/src/
 scripts/scripts/
+
+# compiled JS from src/ — always generated fresh by build script
+src/**/*.js
+src/**/*.d.ts
