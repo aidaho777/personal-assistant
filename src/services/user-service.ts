@@ -1,4 +1,4 @@
-import { db, schema } from "@/db";
+import { db, schema } from "../db";
 import { eq, and } from "drizzle-orm";
 
 const { users } = schema;

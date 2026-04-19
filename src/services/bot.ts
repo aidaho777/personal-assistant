@@ -1,19 +1,19 @@
 import { Telegraf, Context } from "telegraf";
 import { message } from "telegraf/filters";
-import { env } from "@/lib/env";
-import { getAuthorizedUser, checkDbConnection } from "@/services/user-service";
+import { env } from "../lib/env";
+import { getAuthorizedUser, checkDbConnection } from "./user-service";
 import {
   createUploadRecord,
   updateUploadRecord,
   findDuplicateByMd5,
   getUserStats,
   getRecentUploads,
-} from "@/services/upload-service";
+} from "./upload-service";
 import {
   getOrCreateFolder,
   uploadFileToDrive,
   checkDriveConnection,
-} from "@/services/google-drive";
+} from "./google-drive";
 import {
   extractTag,
   buildFileName,
@@ -21,8 +21,8 @@ import {
   getMimeType,
   MAX_FILE_SIZE,
   formatSize,
-} from "@/lib/helpers";
-import type { User } from "@/db/schema";
+} from "../lib/helpers";
+import type { User } from "../db/schema";
 
 // ─── Bot singleton ──────────────────────────────────────────────────────
 

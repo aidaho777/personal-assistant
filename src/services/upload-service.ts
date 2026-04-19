@@ -1,6 +1,6 @@
-import { db, schema } from "@/db";
+import { db, schema } from "../db";
 import { eq, and, gte, sql, desc } from "drizzle-orm";
-import type { NewUpload } from "@/db/schema";
+import type { NewUpload } from "../db/schema";
 
 const { uploads } = schema;
 

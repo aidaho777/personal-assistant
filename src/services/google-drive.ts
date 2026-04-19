@@ -1,5 +1,5 @@
 import { google, drive_v3 } from "googleapis";
-import { env } from "@/lib/env";
+import { env } from "../lib/env";
 import { Readable } from "stream";
 
 let driveClient: drive_v3.Drive | null = null;
