@@ -50,7 +50,18 @@ if (usePolling) {
 
     pollingBot.on("exit", (code) => {
       console.log(`Polling bot exited with code ${code}`);
-      // Don't exit main process — Next.js is still running
+      // Auto-restart polling bot after 15s if it crashed
+      if (code !== 0) {
+        console.log("🔄 Polling bot crashed. Restarting in 15s...");
+        setTimeout(() => {
+          console.log("🤖 Restarting Telegram polling bot...");
+          const newBot = spawn("npx", ["tsx", pollingScript], {
+            stdio: "inherit",
+            env: process.env,
+          });
+          newBot.on("exit", (c) => console.log(`Polling bot (restart) exited with code ${c}`));
+        }, 15000);
+      }
     });
 
     process.once("SIGTERM", () => pollingBot.kill("SIGTERM"));

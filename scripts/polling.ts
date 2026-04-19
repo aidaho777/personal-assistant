@@ -1,33 +1,56 @@
 /**
  * Telegram Long Polling mode — alternative to webhook.
  * Run this as a separate process when TELEGRAM_USE_POLLING=true.
- * 
+ *
+ * Handles 409 Conflict (another instance still running) by waiting and retrying.
  * Usage: npx tsx scripts/polling.ts
  */
 import "dotenv/config";
 import { getBot } from "../src/services/bot";
 
-const bot = getBot();
+const MAX_RETRIES = 10;
+const RETRY_DELAY_MS = 10_000; // 10 seconds between retries
 
-console.log("🤖 Collector Bot starting in LONG POLLING mode...");
-console.log("   Bot will poll Telegram API every few seconds.");
-console.log("   Press Ctrl+C to stop.\n");
+async function startPolling(attempt = 1): Promise<void> {
+  const bot = getBot();
 
-// Graceful shutdown
-process.once("SIGINT", () => {
-  console.log("\n⏹  Stopping bot (SIGINT)...");
-  bot.stop("SIGINT");
-});
-process.once("SIGTERM", () => {
-  console.log("\n⏹  Stopping bot (SIGTERM)...");
-  bot.stop("SIGTERM");
-});
+  console.log(`🤖 Collector Bot starting in LONG POLLING mode... (attempt ${attempt}/${MAX_RETRIES})`);
+  console.log("   Bot will poll Telegram API every few seconds.");
+  console.log("   Press Ctrl+C to stop.\n");
 
-bot.launch({ dropPendingUpdates: true })
-  .then(() => {
-    console.log("✅ Bot is running and polling for updates!");
-  })
-  .catch((err: unknown) => {
-    console.error("❌ Failed to start bot:", err instanceof Error ? err.message : err);
-    process.exit(1);
+  // Graceful shutdown
+  process.once("SIGINT", () => {
+    console.log("\n⏹  Stopping bot (SIGINT)...");
+    bot.stop("SIGINT");
+    process.exit(0);
   });
+  process.once("SIGTERM", () => {
+    console.log("\n⏹  Stopping bot (SIGTERM)...");
+    bot.stop("SIGTERM");
+    process.exit(0);
+  });
+
+  try {
+    await bot.launch({ dropPendingUpdates: true });
+    console.log("✅ Bot is running and polling for updates!");
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    // 409 Conflict — another instance is still running, wait and retry
+    if (message.includes("409") || message.includes("Conflict")) {
+      if (attempt >= MAX_RETRIES) {
+        console.error(`❌ Max retries (${MAX_RETRIES}) reached. Giving up.`);
+        process.exit(1);
+      }
+      console.warn(`⚠️  409 Conflict: another bot instance is running. Retrying in ${RETRY_DELAY_MS / 1000}s...`);
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      return startPolling(attempt + 1);
+    }
+
+    // Any other error — fatal
+    console.error("❌ Failed to start bot:", message);
+    process.exit(1);
+  }
+}
+
+startPolling();
