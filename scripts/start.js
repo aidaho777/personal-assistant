@@ -42,8 +42,8 @@ if (usePolling) {
   // Wait a few seconds for Next.js to initialize before starting polling
   setTimeout(() => {
     console.log("🤖 Starting Telegram polling bot...");
-    const pollingScript = path.join(__dirname, "polling.ts");
-    const pollingBot = spawn("npx", ["tsx", pollingScript], {
+    const pollingScript = path.join(__dirname, "polling.js");
+    const pollingBot = spawn("node", [pollingScript], {
       stdio: "inherit",
       env: process.env,
     });
@@ -55,7 +55,7 @@ if (usePolling) {
         console.log("🔄 Polling bot crashed. Restarting in 15s...");
         setTimeout(() => {
           console.log("🤖 Restarting Telegram polling bot...");
-          const newBot = spawn("npx", ["tsx", pollingScript], {
+          const newBot = spawn("node", [pollingScript], {
             stdio: "inherit",
             env: process.env,
           });
