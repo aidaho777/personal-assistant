@@ -99,22 +99,38 @@ export default function Home() {
           ))}
         </div>
 
-        <a
-          href="/api/health"
-          style={{
-            display: "inline-block",
-            background: "rgba(59,130,246,0.2)",
-            border: "1px solid rgba(59,130,246,0.4)",
-            color: "#93c5fd",
-            borderRadius: "8px",
-            padding: "0.6rem 1.2rem",
-            fontSize: "0.85rem",
-            textDecoration: "none",
-            marginBottom: "1.5rem",
-          }}
-        >
-          🔍 Проверить статус сервиса
-        </a>
+        <div style={{ display: "flex", gap: "0.75rem", justifyContent: "center", marginBottom: "1.5rem", flexWrap: "wrap" }}>
+          <a
+            href="/api/health"
+            style={{
+              display: "inline-block",
+              background: "rgba(59,130,246,0.2)",
+              border: "1px solid rgba(59,130,246,0.4)",
+              color: "#93c5fd",
+              borderRadius: "8px",
+              padding: "0.6rem 1.2rem",
+              fontSize: "0.85rem",
+              textDecoration: "none",
+            }}
+          >
+            🔍 Статус сервиса
+          </a>
+          <a
+            href="/dashboard"
+            style={{
+              display: "inline-block",
+              background: "rgba(52,211,153,0.15)",
+              border: "1px solid rgba(52,211,153,0.35)",
+              color: "#34d399",
+              borderRadius: "8px",
+              padding: "0.6rem 1.2rem",
+              fontSize: "0.85rem",
+              textDecoration: "none",
+            }}
+          >
+            📊 Admin Dashboard
+          </a>
+        </div>
 
         <p
           style={{
