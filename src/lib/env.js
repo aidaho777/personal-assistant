@@ -15,8 +15,10 @@ exports.env = {
     // Telegram
     get TELEGRAM_BOT_TOKEN() { return requireEnv("TELEGRAM_BOT_TOKEN"); },
     get TELEGRAM_WEBHOOK_SECRET() { return requireEnv("TELEGRAM_WEBHOOK_SECRET"); },
-    // Google Drive
-    get GOOGLE_SERVICE_ACCOUNT_JSON() { return requireEnv("GOOGLE_SERVICE_ACCOUNT_JSON"); },
+    // Google Drive (OAuth2)
+    get GOOGLE_CLIENT_ID() { return requireEnv("GOOGLE_CLIENT_ID"); },
+    get GOOGLE_CLIENT_SECRET() { return requireEnv("GOOGLE_CLIENT_SECRET"); },
+    get GOOGLE_REFRESH_TOKEN() { return requireEnv("GOOGLE_REFRESH_TOKEN"); },
     get GOOGLE_DRIVE_ROOT_FOLDER_ID() { return requireEnv("GOOGLE_DRIVE_ROOT_FOLDER_ID"); },
     // Database
     get DATABASE_URL() { return requireEnv("DATABASE_URL"); },

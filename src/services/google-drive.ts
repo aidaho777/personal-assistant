@@ -4,41 +4,20 @@ import { Readable } from "stream";
 
 let driveClient: drive_v3.Drive | null = null;
 
-/**
- * Parse GOOGLE_SERVICE_ACCOUNT_JSON — supports both raw JSON and base64-encoded JSON.
- * Base64 encoding is the recommended way to store complex JSON in Railway env vars.
- */
-function parseServiceAccountJson(raw: string): object {
-  const trimmed = raw.trim();
-  // Try base64 first: if it doesn't start with '{', assume it's base64-encoded
-  if (!trimmed.startsWith('{')) {
-    try {
-      const decoded = Buffer.from(trimmed, 'base64').toString('utf-8');
-      return JSON.parse(decoded);
-    } catch {
-      // fall through to raw parse
-    }
-  }
-  // Raw JSON (possibly with Railway-added quirks — strip outer quotes if present)
-  let s = trimmed;
-  if (s.startsWith('"') && s.endsWith('"')) {
-    // Railway sometimes wraps value in extra quotes
-    s = s.slice(1, -1).replace(/\\"/g, '"').replace(/\\n/g, '\n');
-  }
-  return JSON.parse(s);
-}
-
-/** Lazy-init & cache the Drive client */
+/** Lazy-init & cache the Drive client using OAuth2 */
 function getDrive(): drive_v3.Drive {
   if (driveClient) return driveClient;
 
-  const credentials = parseServiceAccountJson(env.GOOGLE_SERVICE_ACCOUNT_JSON);
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ["https://www.googleapis.com/auth/drive"],
+  const oauth2Client = new google.auth.OAuth2(
+    env.GOOGLE_CLIENT_ID,
+    env.GOOGLE_CLIENT_SECRET
+  );
+
+  oauth2Client.setCredentials({
+    refresh_token: env.GOOGLE_REFRESH_TOKEN,
   });
 
-  driveClient = google.drive({ version: "v3", auth });
+  driveClient = google.drive({ version: "v3", auth: oauth2Client });
   return driveClient;
 }
 
@@ -64,8 +43,6 @@ export async function getOrCreateFolder(folderName: string): Promise<string> {
     q: query,
     fields: "files(id, name)",
     spaces: "drive",
-    supportsAllDrives: true,
-    includeItemsFromAllDrives: true,
   });
 
   if (res.data.files && res.data.files.length > 0) {
@@ -82,7 +59,6 @@ export async function getOrCreateFolder(folderName: string): Promise<string> {
       parents: [rootId],
     },
     fields: "id",
-    supportsAllDrives: true,
   });
 
   const id = created.data.id!;
@@ -123,7 +99,6 @@ export async function uploadFileToDrive(
       body: readable,
     },
     fields: "id, webViewLink",
-    supportsAllDrives: true,
   });
 
   return {
@@ -141,11 +116,7 @@ export async function uploadFileToDrive(
 export async function checkDriveConnection(): Promise<boolean> {
   try {
     const drive = getDrive();
-    await drive.files.get({
-      fileId: env.GOOGLE_DRIVE_ROOT_FOLDER_ID,
-      fields: "id",
-      supportsAllDrives: true,
-    });
+    await drive.files.get({ fileId: env.GOOGLE_DRIVE_ROOT_FOLDER_ID, fields: "id" });
     return true;
   } catch {
     return false;

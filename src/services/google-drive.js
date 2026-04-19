@@ -7,40 +7,15 @@ const googleapis_1 = require("googleapis");
 const env_1 = require("../lib/env");
 const stream_1 = require("stream");
 let driveClient = null;
-/**
- * Parse GOOGLE_SERVICE_ACCOUNT_JSON — supports both raw JSON and base64-encoded JSON.
- * Base64 encoding is the recommended way to store complex JSON in Railway env vars.
- */
-function parseServiceAccountJson(raw) {
-    const trimmed = raw.trim();
-    // Try base64 first: if it doesn't start with '{', assume it's base64-encoded
-    if (!trimmed.startsWith('{')) {
-        try {
-            const decoded = Buffer.from(trimmed, 'base64').toString('utf-8');
-            return JSON.parse(decoded);
-        }
-        catch (_a) {
-            // fall through to raw parse
-        }
-    }
-    // Raw JSON (possibly with Railway-added quirks — strip outer quotes if present)
-    let s = trimmed;
-    if (s.startsWith('"') && s.endsWith('"')) {
-        // Railway sometimes wraps value in extra quotes
-        s = s.slice(1, -1).replace(/\\"/g, '"').replace(/\\n/g, '\n');
-    }
-    return JSON.parse(s);
-}
-/** Lazy-init & cache the Drive client */
+/** Lazy-init & cache the Drive client using OAuth2 */
 function getDrive() {
     if (driveClient)
         return driveClient;
-    const credentials = parseServiceAccountJson(env_1.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-    const auth = new googleapis_1.google.auth.GoogleAuth({
-        credentials,
-        scopes: ["https://www.googleapis.com/auth/drive"],
+    const oauth2Client = new googleapis_1.google.auth.OAuth2(env_1.env.GOOGLE_CLIENT_ID, env_1.env.GOOGLE_CLIENT_SECRET);
+    oauth2Client.setCredentials({
+        refresh_token: env_1.env.GOOGLE_REFRESH_TOKEN,
     });
-    driveClient = googleapis_1.google.drive({ version: "v3", auth });
+    driveClient = googleapis_1.google.drive({ version: "v3", auth: oauth2Client });
     return driveClient;
 }
 // ─── Folder management ─────────────────────────────────────────────────
@@ -62,8 +37,6 @@ async function getOrCreateFolder(folderName) {
         q: query,
         fields: "files(id, name)",
         spaces: "drive",
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
     });
     if (res.data.files && res.data.files.length > 0) {
         const id = res.data.files[0].id;
@@ -78,7 +51,6 @@ async function getOrCreateFolder(folderName) {
             parents: [rootId],
         },
         fields: "id",
-        supportsAllDrives: true,
     });
     const id = created.data.id;
     folderCache.set(folderName, id);
@@ -103,7 +75,6 @@ async function uploadFileToDrive(buffer, fileName, mimeType, folderId) {
             body: readable,
         },
         fields: "id, webViewLink",
-        supportsAllDrives: true,
     });
     return {
         fileId: file.data.id,
@@ -118,11 +89,7 @@ async function uploadFileToDrive(buffer, fileName, mimeType, folderId) {
 async function checkDriveConnection() {
     try {
         const drive = getDrive();
-        await drive.files.get({
-            fileId: env_1.env.GOOGLE_DRIVE_ROOT_FOLDER_ID,
-            fields: "id",
-            supportsAllDrives: true,
-        });
+        await drive.files.get({ fileId: env_1.env.GOOGLE_DRIVE_ROOT_FOLDER_ID, fields: "id" });
         return true;
     }
     catch (_a) {
