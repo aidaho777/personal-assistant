@@ -14,3 +14,6 @@ out/
 *.log
 .DS_Store
 
+# tsc output pollution prevention
+scripts/src/
+scripts/scripts/
