@@ -52,8 +52,23 @@ export const uploads = pgTable(
   })
 );
 
+// ─── web_users table (web dashboard auth) ─────────────────────────────
+export const webUsers = pgTable("web_users", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  email: varchar("email", { length: 255 }).notNull().unique(),
+  name: varchar("name", { length: 128 }),
+  passwordHash: varchar("password_hash", { length: 255 }),
+  avatarUrl: text("avatar_url"),
+  role: varchar("role", { length: 16 }).notNull().default("user"),
+  telegramUserId: uuid("telegram_user_id").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+});
+
 // ─── Type helpers ──────────────────────────────────────────────────────
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Upload = typeof uploads.$inferSelect;
 export type NewUpload = typeof uploads.$inferInsert;
+export type WebUser = typeof webUsers.$inferSelect;
+export type NewWebUser = typeof webUsers.$inferInsert;

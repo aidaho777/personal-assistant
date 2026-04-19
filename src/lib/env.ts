@@ -27,6 +27,12 @@ export const env = {
   // Database
   get DATABASE_URL() { return requireEnv("DATABASE_URL"); },
 
+  // NextAuth
+  get NEXTAUTH_SECRET() { return requireEnv("NEXTAUTH_SECRET"); },
+  get NEXTAUTH_URL() { return process.env.NEXTAUTH_URL ?? "http://localhost:3000"; },
+  get GOOGLE_OAUTH_CLIENT_ID() { return requireEnv("GOOGLE_OAUTH_CLIENT_ID"); },
+  get GOOGLE_OAUTH_CLIENT_SECRET() { return requireEnv("GOOGLE_OAUTH_CLIENT_SECRET"); },
+
   // App
   get APP_URL() { return process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"; },
 } as const;
