@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.2",
-    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
     "crypto": "^1.0.1",
     "dotenv": "^16.4.0",
     "drizzle-orm": "^0.30.0",
@@ -32,7 +32,7 @@
     "tsx": "^4.0.0"
   },
   "devDependencies": {
-    "@types/bcrypt": "^6.0.0",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20.0.0",
     "@types/react": "^18.3.0",
     "autoprefixer": "^10.5.0",
