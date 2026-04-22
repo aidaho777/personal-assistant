@@ -13,12 +13,10 @@ async function getFunnel(since: Date | null) {
       .where(userFilter ? and(userFilter, isNotNull(webUsers.telegramUserId)) : isNotNull(webUsers.telegramUserId))
       .then(r => r[0]?.c ?? 0),
     db.select({ c: sql<number>`count(distinct user_id)::int` }).from(uploads).then(r => r[0]?.c ?? 0),
-    db.select({ c: sql<number>`count(*)::int` })
-      .from(db.select({ userId: uploads.userId, cnt: sql<number>`count(*)::int` }).from(uploads).groupBy(uploads.userId).as("s"))
-      .where(sql`cnt >= 5`).then(r => r[0]?.c ?? 0),
-    db.select({ c: sql<number>`count(*)::int` })
-      .from(db.select({ userId: uploads.userId, cnt: sql<number>`count(*)::int` }).from(uploads).groupBy(uploads.userId).as("s"))
-      .where(sql`cnt >= 20`).then(r => r[0]?.c ?? 0),
+    db.select({ c: sql<number>`(SELECT count(*)::int FROM (SELECT user_id FROM uploads GROUP BY user_id HAVING count(*) >= 5) AS active_users)` })
+      .then(r => r[0]?.c ?? 0),
+    db.select({ c: sql<number>`(SELECT count(*)::int FROM (SELECT user_id FROM uploads GROUP BY user_id HAVING count(*) >= 20) AS power_users)` })
+      .then(r => r[0]?.c ?? 0),
   ]);
 
   const values = [registered, linked, firstUpload, active, power];
