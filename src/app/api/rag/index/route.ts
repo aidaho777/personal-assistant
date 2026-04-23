@@ -49,10 +49,11 @@ export async function POST(req: NextRequest) {
 
   try {
     // Get the telegram user linked to this web user
-    const webUserResult = await db.execute(sql.raw(`
+    const webUserResult: any = await db.execute(sql.raw(`
       SELECT telegram_user_id FROM web_users WHERE id = '${session.user.id}'
     `));
-    const telegramUserId = (webUserResult.rows?.[0] as { telegram_user_id?: string })?.telegram_user_id;
+    const webUserRows = Array.isArray(webUserResult) ? webUserResult : (webUserResult.rows ?? []);
+    const telegramUserId = webUserRows[0]?.telegram_user_id as string | undefined;
 
     if (!telegramUserId) {
       return NextResponse.json(
@@ -83,8 +84,9 @@ export async function POST(req: NextRequest) {
       `;
     }
 
-    const uploadsResult = await db.execute(sql.raw(uploadsQuery));
-    const uploads = (uploadsResult.rows ?? []) as {
+    const uploadsResult: any = await db.execute(sql.raw(uploadsQuery));
+    const uploadsRows = Array.isArray(uploadsResult) ? uploadsResult : (uploadsResult.rows ?? []);
+    const uploads = uploadsRows as {
       id: string;
       file_name: string;
       original_name?: string;
