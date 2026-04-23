@@ -1,11 +1,9 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { db, schema } from "@/db";
-import { eq, sql } from "drizzle-orm";
+import { db } from "@/db";
+import { sql } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
-
-const { documentChunks, uploads } = schema;
 
 export async function GET() {
   const session = await auth();
@@ -14,28 +12,40 @@ export async function GET() {
   }
 
   try {
-    const [chunksRow] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(documentChunks)
-      .where(eq(documentChunks.userId, session.user.id));
+    // Count indexed documents (uploads that have chunks) for this web user
+    const indexedResult = await db.execute(sql.raw(`
+      SELECT COUNT(DISTINCT dc.upload_id) as count
+      FROM document_chunks dc
+      JOIN uploads u ON dc.upload_id = u.id
+      JOIN web_users wu ON wu.telegram_user_id = u.user_id
+      WHERE wu.id = '${session.user.id}'
+    `));
 
-    const [docsRow] = await db
-      .select({ count: sql<number>`count(distinct upload_id)::int` })
-      .from(documentChunks)
-      .where(eq(documentChunks.userId, session.user.id));
+    // Count total chunks
+    const chunksResult = await db.execute(sql.raw(`
+      SELECT COUNT(*) as count
+      FROM document_chunks dc
+      JOIN uploads u ON dc.upload_id = u.id
+      JOIN web_users wu ON wu.telegram_user_id = u.user_id
+      WHERE wu.id = '${session.user.id}'
+    `));
 
-    const [totalUploads] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(uploads)
-      .where(eq(uploads.status, "success"));
+    // Count total uploads for this web user
+    const uploadsResult = await db.execute(sql.raw(`
+      SELECT COUNT(*) as count
+      FROM uploads u
+      JOIN web_users wu ON wu.telegram_user_id = u.user_id
+      WHERE wu.id = '${session.user.id}'
+    `));
 
-    return NextResponse.json({
-      indexedDocuments: docsRow?.count ?? 0,
-      totalChunks: chunksRow?.count ?? 0,
-      totalUploads: totalUploads?.count ?? 0,
-    });
+    const indexedDocuments = Number((indexedResult.rows?.[0] as { count?: string })?.count ?? 0);
+    const totalChunks = Number((chunksResult.rows?.[0] as { count?: string })?.count ?? 0);
+    const totalUploads = Number((uploadsResult.rows?.[0] as { count?: string })?.count ?? 0);
+
+    return NextResponse.json({ indexedDocuments, totalChunks, totalUploads });
   } catch (error) {
     console.error("RAG stats error:", error);
+    // Return zeros if table doesn't exist yet
     return NextResponse.json({ indexedDocuments: 0, totalChunks: 0, totalUploads: 0 });
   }
 }
