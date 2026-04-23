@@ -38,7 +38,7 @@ async function searchDocuments(
     const embeddingStr = `[${embedding.join(",")}]`;
 
     // Use raw SQL to avoid Drizzle ORM type issues with pgvector
-    const results = await db.execute(sql.raw(`
+    const results: any = await db.execute(sql.raw(`
       SELECT dc.content, dc.metadata
       FROM document_chunks dc
       JOIN uploads u ON dc.upload_id = u.id
@@ -48,10 +48,11 @@ async function searchDocuments(
       LIMIT ${limit}
     `));
 
-    return (results.rows ?? []) as { content: string; metadata: Record<string, unknown> | null }[];
+    const rows = Array.isArray(results) ? results : (results.rows ?? []);
+    return rows as { content: string; metadata: Record<string, unknown> | null }[];
   } catch {
     // Fallback: full-text search if pgvector not available
-    const results = await db.execute(sql.raw(`
+    const results: any = await db.execute(sql.raw(`
       SELECT dc.content, dc.metadata
       FROM document_chunks dc
       JOIN uploads u ON dc.upload_id = u.id
@@ -60,7 +61,8 @@ async function searchDocuments(
         AND dc.content ILIKE '%${query.replace(/'/g, "''")}%'
       LIMIT ${limit}
     `));
-    return (results.rows ?? []) as { content: string; metadata: Record<string, unknown> | null }[];
+    const rows = Array.isArray(results) ? results : (results.rows ?? []);
+    return rows as { content: string; metadata: Record<string, unknown> | null }[];
   }
 }
 
