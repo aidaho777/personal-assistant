@@ -1,35 +1,40 @@
-import { db, schema } from "@/db";
+import { db } from "@/db";
 import { sql } from "drizzle-orm";
-
-const { webUsers, uploads, users } = schema;
 
 // ─── Data fetching ──────────────────────────────────────────────────────────
 
 async function getAARRRData() {
   const now = new Date();
-  // Use ISO strings to avoid TypeError: "string" argument must be of type string
-  const d7 = new Date(now.getTime() - 7 * 86400_000).toISOString();
+  // Build ISO date strings and embed directly into SQL to avoid Drizzle serialization issues
+  const d7  = new Date(now.getTime() - 7  * 86400_000).toISOString();
   const d14 = new Date(now.getTime() - 14 * 86400_000).toISOString();
   const d30 = new Date(now.getTime() - 30 * 86400_000).toISOString();
   const d60 = new Date(now.getTime() - 60 * 86400_000).toISOString();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
 
+  // Helper: run a raw SQL query and return first row's numeric field "c"
+  const count = async (rawSql: string): Promise<number> => {
+    const r: any = await db.execute(sql.raw(rawSql));
+    return Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0);
+  };
+
+  const rows = async <T>(rawSql: string): Promise<T[]> => {
+    const r: any = await db.execute(sql.raw(rawSql));
+    return (r.rows ?? r) as T[];
+  };
+
   const [
-    // Acquisition
     totalWebUsers,
     newUsersLast7,
     newUsersLast30,
     newUsersPrev30,
     totalTelegramUsers,
-    // Activation
-    activatedUsers,        // web users who linked Telegram
-    usersWithFirstUpload,  // users who made at least 1 upload
-    // Retention
-    activeUsersLast7,      // users who uploaded in last 7 days
-    activeUsersLast30,     // users who uploaded in last 30 days
-    activeUsersPrev30,     // users who uploaded in prev 30 days (for comparison)
-    powerUsers,            // users with 20+ uploads
-    // Revenue (proxy: engagement)
+    activatedUsers,
+    usersWithFirstUpload,
+    activeUsersLast7,
+    activeUsersLast30,
+    activeUsersPrev30,
+    powerUsers,
     totalUploads,
     uploadsLast7,
     uploadsLast30,
@@ -37,56 +42,51 @@ async function getAARRRData() {
     successUploads,
     errorUploads,
     voiceUploads,
-    // Referral
     usersLinkedTelegram,
-    // Daily activity for chart
     dailyActivity,
-    // Content type breakdown
     contentTypes,
-    // Top users by activity
     topUsers,
-    // Cohort: users by week of registration
     weeklySignups,
   ] = await Promise.all([
     // Acquisition
-    db.execute(sql`SELECT count(*)::int AS c FROM web_users`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(*)::int AS c FROM web_users WHERE created_at >= ${d7}`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(*)::int AS c FROM web_users WHERE created_at >= ${d30}`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(*)::int AS c FROM web_users WHERE created_at >= ${d60} AND created_at < ${d30}`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(*)::int AS c FROM users`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
+    count(`SELECT count(*)::int AS c FROM web_users`),
+    count(`SELECT count(*)::int AS c FROM web_users WHERE created_at >= '${d7}'`),
+    count(`SELECT count(*)::int AS c FROM web_users WHERE created_at >= '${d30}'`),
+    count(`SELECT count(*)::int AS c FROM web_users WHERE created_at >= '${d60}' AND created_at < '${d30}'`),
+    count(`SELECT count(*)::int AS c FROM users`),
     // Activation
-    db.execute(sql`SELECT count(*)::int AS c FROM web_users WHERE telegram_user_id IS NOT NULL`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(distinct user_id)::int AS c FROM uploads`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
+    count(`SELECT count(*)::int AS c FROM web_users WHERE telegram_user_id IS NOT NULL`),
+    count(`SELECT count(distinct user_id)::int AS c FROM uploads`),
     // Retention
-    db.execute(sql`SELECT count(distinct user_id)::int AS c FROM uploads WHERE created_at >= ${d7}`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(distinct user_id)::int AS c FROM uploads WHERE created_at >= ${d30}`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(distinct user_id)::int AS c FROM uploads WHERE created_at >= ${d60} AND created_at < ${d30}`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(*)::int AS c FROM (SELECT user_id FROM uploads GROUP BY user_id HAVING count(*) >= 20) t`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
+    count(`SELECT count(distinct user_id)::int AS c FROM uploads WHERE created_at >= '${d7}'`),
+    count(`SELECT count(distinct user_id)::int AS c FROM uploads WHERE created_at >= '${d30}'`),
+    count(`SELECT count(distinct user_id)::int AS c FROM uploads WHERE created_at >= '${d60}' AND created_at < '${d30}'`),
+    count(`SELECT count(*)::int AS c FROM (SELECT user_id FROM uploads GROUP BY user_id HAVING count(*) >= 20) t`),
     // Revenue proxy
-    db.execute(sql`SELECT count(*)::int AS c FROM uploads`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(*)::int AS c FROM uploads WHERE created_at >= ${d7}`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(*)::int AS c FROM uploads WHERE created_at >= ${d30}`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(*)::int AS c FROM uploads WHERE created_at >= ${todayStart}`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(*)::int AS c FROM uploads WHERE status = 'success'`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(*)::int AS c FROM uploads WHERE status = 'error'`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
-    db.execute(sql`SELECT count(*)::int AS c FROM uploads WHERE content_type = 'voice'`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
+    count(`SELECT count(*)::int AS c FROM uploads`),
+    count(`SELECT count(*)::int AS c FROM uploads WHERE created_at >= '${d7}'`),
+    count(`SELECT count(*)::int AS c FROM uploads WHERE created_at >= '${d30}'`),
+    count(`SELECT count(*)::int AS c FROM uploads WHERE created_at >= '${todayStart}'`),
+    count(`SELECT count(*)::int AS c FROM uploads WHERE status = 'success'`),
+    count(`SELECT count(*)::int AS c FROM uploads WHERE status = 'error'`),
+    count(`SELECT count(*)::int AS c FROM uploads WHERE content_type = 'voice'`),
     // Referral
-    db.execute(sql`SELECT count(*)::int AS c FROM web_users WHERE telegram_user_id IS NOT NULL`).then((r: any) => Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0)),
+    count(`SELECT count(*)::int AS c FROM web_users WHERE telegram_user_id IS NOT NULL`),
     // Daily activity last 30 days
-    db.execute(sql`
+    rows<{ date: string; count: number }>(`
       SELECT date_trunc('day', created_at)::date::text AS date, count(*)::int AS count
       FROM uploads
-      WHERE created_at >= ${d30}
+      WHERE created_at >= '${d30}'
       GROUP BY 1 ORDER BY 1
-    `).then((r: any) => (r.rows ?? r) as { date: string; count: number }[]),
+    `),
     // Content types
-    db.execute(sql`
+    rows<{ content_type: string; count: number }>(`
       SELECT content_type, count(*)::int AS count
       FROM uploads
       GROUP BY content_type ORDER BY count DESC
-    `).then((r: any) => (r.rows ?? r) as { content_type: string; count: number }[]),
+    `),
     // Top users
-    db.execute(sql`
+    rows<{ first_name: string; username: string; uploads_count: number; last_active: string }>(`
       SELECT u.first_name, u.username, count(up.id)::int AS uploads_count,
              max(up.created_at)::text AS last_active
       FROM users u
@@ -94,48 +94,42 @@ async function getAARRRData() {
       GROUP BY u.id, u.first_name, u.username
       ORDER BY uploads_count DESC
       LIMIT 5
-    `).then((r: any) => (r.rows ?? r) as { first_name: string; username: string; uploads_count: number; last_active: string }[]),
+    `),
     // Weekly signups (last 8 weeks)
-    db.execute(sql`
+    rows<{ week: string; count: number }>(`
       SELECT date_trunc('week', created_at)::date::text AS week, count(*)::int AS count
       FROM web_users
-      WHERE created_at >= ${d60}
+      WHERE created_at >= '${d60}'
       GROUP BY 1 ORDER BY 1
-    `).then((r: any) => (r.rows ?? r) as { week: string; count: number }[]),
+    `),
   ]);
 
   // Computed metrics
-  const activationRate = totalTelegramUsers > 0 ? Math.round((usersWithFirstUpload / totalTelegramUsers) * 100) : 0;
-  const retentionRate7 = totalTelegramUsers > 0 ? Math.round((activeUsersLast7 / totalTelegramUsers) * 100) : 0;
-  const retentionRate30 = totalTelegramUsers > 0 ? Math.round((activeUsersLast30 / totalTelegramUsers) * 100) : 0;
-  const churnRate = activeUsersPrev30 > 0 ? Math.round(((activeUsersPrev30 - activeUsersLast30) / activeUsersPrev30) * 100) : 0;
-  const successRate = totalUploads > 0 ? Math.round((successUploads / totalUploads) * 100) : 0;
-  const growthRate = newUsersPrev30 > 0 ? Math.round(((newUsersLast30 - newUsersPrev30) / newUsersPrev30) * 100) : 0;
+  const activationRate   = totalTelegramUsers > 0 ? Math.round((usersWithFirstUpload / totalTelegramUsers) * 100) : 0;
+  const retentionRate7   = totalTelegramUsers > 0 ? Math.round((activeUsersLast7  / totalTelegramUsers) * 100) : 0;
+  const retentionRate30  = totalTelegramUsers > 0 ? Math.round((activeUsersLast30 / totalTelegramUsers) * 100) : 0;
+  const churnRate        = activeUsersPrev30  > 0 ? Math.round(((activeUsersPrev30 - activeUsersLast30) / activeUsersPrev30) * 100) : 0;
+  const successRate      = totalUploads > 0 ? Math.round((successUploads / totalUploads) * 100) : 0;
+  const growthRate       = newUsersPrev30 > 0 ? Math.round(((newUsersLast30 - newUsersPrev30) / newUsersPrev30) * 100) : 0;
   const avgUploadsPerUser = totalTelegramUsers > 0 ? (totalUploads / totalTelegramUsers).toFixed(1) : "0";
   const telegramLinkRate = totalWebUsers > 0 ? Math.round((activatedUsers / totalWebUsers) * 100) : 0;
 
-  // Fill daily chart gaps
-  const nowDate = new Date();
+  // Fill daily chart gaps (last 30 days)
+  const nowDate  = new Date();
   const dailyMap = new Map(dailyActivity.map(r => [r.date, r.count]));
   const dailyChart: { date: string; count: number }[] = [];
   for (let i = 29; i >= 0; i--) {
-    const d = new Date(nowDate.getTime() - i * 86400_000);
+    const d   = new Date(nowDate.getTime() - i * 86400_000);
     const key = d.toISOString().slice(0, 10);
     dailyChart.push({ date: key, count: dailyMap.get(key) ?? 0 });
   }
 
   return {
-    // Acquisition
     totalWebUsers, newUsersLast7, newUsersLast30, growthRate, totalTelegramUsers,
-    // Activation
     activatedUsers, usersWithFirstUpload, activationRate, telegramLinkRate,
-    // Retention
     activeUsersLast7, activeUsersLast30, retentionRate7, retentionRate30, churnRate, powerUsers,
-    // Revenue proxy
     totalUploads, uploadsLast7, uploadsLast30, uploadsToday, successRate, voiceUploads, avgUploadsPerUser,
-    // Referral
     usersLinkedTelegram,
-    // Charts
     dailyChart, contentTypes, topUsers, weeklySignups,
   };
 }
@@ -149,12 +143,12 @@ function MetricCard({
   trend?: { value: number; label: string }; color?: string; icon: string;
 }) {
   const colors: Record<string, string> = {
-    blue: "bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800",
-    green: "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800",
+    blue:   "bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800",
+    green:  "bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800",
     purple: "bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800",
     orange: "bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800",
-    red: "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800",
-    slate: "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700",
+    red:    "bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800",
+    slate:  "bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700",
   };
   return (
     <div className={`rounded-xl border p-4 ${colors[color] ?? colors.slate}`}>
@@ -212,11 +206,11 @@ export default async function AARRRContent() {
   const d = await getAARRRData();
 
   const funnelSteps = [
-    { label: "Acquisition", sub: "Посетители зарегистрировались", value: d.totalWebUsers, icon: "🎯", color: "blue" },
-    { label: "Activation", sub: "Привязали Telegram-бота", value: d.activatedUsers, icon: "⚡", color: "purple" },
-    { label: "Revenue", sub: "Сделали первую загрузку", value: d.usersWithFirstUpload, icon: "💎", color: "green" },
-    { label: "Retention", sub: "Активны за 30 дней", value: d.activeUsersLast30, icon: "🔄", color: "orange" },
-    { label: "Referral", sub: "Power users (20+ загрузок)", value: d.powerUsers, icon: "🚀", color: "red" },
+    { label: "Acquisition", sub: "Посетители зарегистрировались", value: d.totalWebUsers,      icon: "🎯", color: "blue"   },
+    { label: "Activation",  sub: "Привязали Telegram-бота",       value: d.activatedUsers,     icon: "⚡", color: "purple" },
+    { label: "Revenue",     sub: "Сделали первую загрузку",        value: d.usersWithFirstUpload, icon: "💎", color: "green"  },
+    { label: "Retention",   sub: "Активны за 30 дней",            value: d.activeUsersLast30,  icon: "🔄", color: "orange" },
+    { label: "Referral",    sub: "Power users (20+ загрузок)",     value: d.powerUsers,         icon: "🚀", color: "red"    },
   ];
 
   const maxFunnel = d.totalWebUsers || 1;
@@ -237,7 +231,7 @@ export default async function AARRRContent() {
         />
         <div className="space-y-3">
           {funnelSteps.map((step, i) => {
-            const pct = Math.round((step.value / maxFunnel) * 100);
+            const pct     = Math.round((step.value / maxFunnel) * 100);
             const stepConv = i === 0 ? 100 : funnelSteps[i - 1].value > 0
               ? Math.round((step.value / funnelSteps[i - 1].value) * 100) : 0;
             const barColors: Record<string, string> = {
@@ -347,9 +341,7 @@ export default async function AARRRContent() {
               : "bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-400"
             }`}>
               <span className="text-lg">{d.growthRate > 0 ? "📈" : d.growthRate < 0 ? "📉" : "➡️"}</span>
-              <span>
-                Рост {d.growthRate > 0 ? "+" : ""}{d.growthRate}% по сравнению с предыдущим месяцем
-              </span>
+              <span>Рост {d.growthRate > 0 ? "+" : ""}{d.growthRate}% по сравнению с предыдущим месяцем</span>
             </div>
           </div>
         </div>
@@ -467,7 +459,6 @@ export default async function AARRRContent() {
               </div>
               <ProgressBar value={d.voiceUploads} max={d.totalUploads} color="purple" />
             </div>
-            {/* Content types */}
             <div>
               <div className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-2">
                 По типам контента
@@ -492,8 +483,8 @@ export default async function AARRRContent() {
         <div className="flex items-end gap-1 h-24">
           {d.dailyChart.map(({ date, count }) => {
             const maxCount = Math.max(...d.dailyChart.map(r => r.count), 1);
-            const height = Math.max(Math.round((count / maxCount) * 100), count > 0 ? 8 : 2);
-            const isToday = date === new Date().toISOString().slice(0, 10);
+            const height   = Math.max(Math.round((count / maxCount) * 100), count > 0 ? 8 : 2);
+            const isToday  = date === new Date().toISOString().slice(0, 10);
             return (
               <div key={date} className="flex-1 flex flex-col items-center gap-1 group relative">
                 <div
@@ -513,7 +504,7 @@ export default async function AARRRContent() {
         </div>
       </div>
 
-      {/* ── Top Users + Referral ──────────────────────────────────────── */}
+      {/* ── Top Users + Product Health ────────────────────────────────── */}
       <div className="grid lg:grid-cols-2 gap-4">
         {/* Top users */}
         <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5">
@@ -549,41 +540,16 @@ export default async function AARRRContent() {
           )}
         </div>
 
-        {/* Referral / Health */}
+        {/* Product Health */}
         <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5">
           <SectionHeader title="Product Health" subtitle="Сводка ключевых сигналов" badge="HEALTH" />
           <div className="space-y-3">
             {[
-              {
-                label: "Активация (Telegram link)",
-                value: d.telegramLinkRate,
-                threshold: 50,
-                icon: "🔗",
-              },
-              {
-                label: "Активация (первая загрузка)",
-                value: d.activationRate,
-                threshold: 40,
-                icon: "📤",
-              },
-              {
-                label: "Retention 7д",
-                value: d.retentionRate7,
-                threshold: 30,
-                icon: "📅",
-              },
-              {
-                label: "Retention 30д",
-                value: d.retentionRate30,
-                threshold: 20,
-                icon: "📆",
-              },
-              {
-                label: "Успешность загрузок",
-                value: d.successRate,
-                threshold: 90,
-                icon: "✅",
-              },
+              { label: "Активация (Telegram link)",  value: d.telegramLinkRate, threshold: 50, icon: "🔗" },
+              { label: "Активация (первая загрузка)", value: d.activationRate,  threshold: 40, icon: "📤" },
+              { label: "Retention 7д",               value: d.retentionRate7,   threshold: 30, icon: "📅" },
+              { label: "Retention 30д",              value: d.retentionRate30,  threshold: 20, icon: "📆" },
+              { label: "Успешность загрузок",        value: d.successRate,      threshold: 90, icon: "✅" },
             ].map(({ label, value, threshold, icon }) => (
               <div key={label} className="flex items-center gap-3">
                 <span className="text-base w-6">{icon}</span>
