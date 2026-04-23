@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, type FormEvent } from "react";
+import { useState, useRef, useEffect, type FormEvent } from "react";
 
 interface Message {
   id: string;
@@ -24,14 +24,12 @@ export default function ChatClient() {
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const loadStats = useCallback(async () => {
-    try {
-      const res = await fetch("/api/rag/stats");
-      if (res.ok) setStats(await res.json() as RagStats);
-    } catch { /* ignore */ }
+  useEffect(() => {
+    fetch("/api/rag/stats")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data) setStats(data as RagStats); })
+      .catch(() => {});
   }, []);
-
-  useEffect(() => { loadStats(); }, [loadStats]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -42,11 +40,11 @@ export default function ChatClient() {
     const text = input.trim();
     if (!text || isLoading) return;
 
-    setInput("");
-    setError(null);
-    const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: text };
+    const userMsg: Message = { id: Date.now().toString(), role: "user", content: text };
     setMessages((prev) => [...prev, userMsg]);
+    setInput("");
     setIsLoading(true);
+    setError(null);
 
     try {
       const res = await fetch("/api/rag/chat", {
@@ -55,48 +53,34 @@ export default function ChatClient() {
         body: JSON.stringify({ message: text }),
       });
 
+      const data = await res.json() as { answer?: string; error?: string; message?: string };
+
       if (!res.ok) {
-        const data = await res.json() as { error?: string; message?: string };
-        throw new Error(data.message ?? data.error ?? "Request failed");
+        const errMsg = data.message || data.error || "Ошибка сервера";
+        setError(errMsg);
+        setMessages((prev) => [
+          ...prev,
+          { id: Date.now().toString(), role: "assistant", content: `⚠️ ${errMsg}` },
+        ]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { id: Date.now().toString(), role: "assistant", content: data.answer ?? "" },
+        ]);
       }
-
-      const contentType = res.headers.get("content-type") ?? "";
-      if (contentType.includes("application/json")) {
-        const data = await res.json() as { error?: string; message?: string };
-        if (data.error === "no_documents") {
-          setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "assistant", content: data.message ?? "Нет документов для поиска." }]);
-          setIsLoading(false);
-          return;
-        }
-      }
-
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No response body");
-
-      const assistantId = crypto.randomUUID();
-      setMessages((prev) => [...prev, { id: assistantId, role: "assistant", content: "" }]);
-
-      const decoder = new TextDecoder();
-      let accumulated = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        accumulated += chunk;
-        const cleanText = accumulated.replace(/^\d+:"?|"?\n$/gm, "").replace(/\\n/g, "\n");
-        setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, content: cleanText } : m))
-        );
-      }
-    } catch (err) {
-      setError(String(err instanceof Error ? err.message : err));
+    } catch {
+      const msg = "Не удалось подключиться к серверу";
+      setError(msg);
+      setMessages((prev) => [
+        ...prev,
+        { id: Date.now().toString(), role: "assistant", content: `⚠️ ${msg}` },
+      ]);
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   }
 
-  async function handleIndex() {
+  async function handleIndexAll() {
     setIndexing(true);
     setIndexResult(null);
     try {
@@ -105,94 +89,95 @@ export default function ChatClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ all: true }),
       });
-      const data = await res.json() as { indexed?: number; errors?: string[] };
-      setIndexResult(`Проиндексировано: ${data.indexed ?? 0} документов${data.errors?.length ? `, ошибок: ${data.errors.length}` : ""}`);
-      loadStats();
+      const data = await res.json() as { indexed?: number; message?: string; error?: string };
+      if (res.ok) {
+        setIndexResult(`✅ Проиндексировано документов: ${data.indexed ?? 0}`);
+        // Refresh stats
+        fetch("/api/rag/stats")
+          .then((r) => r.ok ? r.json() : null)
+          .then((d) => { if (d) setStats(d as RagStats); })
+          .catch(() => {});
+      } else {
+        setIndexResult(`❌ Ошибка: ${data.error ?? data.message ?? "неизвестная ошибка"}`);
+      }
     } catch {
-      setIndexResult("Ошибка индексации");
+      setIndexResult("❌ Не удалось запустить индексацию");
+    } finally {
+      setIndexing(false);
     }
-    setIndexing(false);
-  }
-
-  function extractSources(text: string): string[] {
-    const matches = text.match(/\[([^\]]+\.[a-z]+[^\]]*)\]/gi);
-    return matches ? [...new Set(matches.map((m) => m.slice(1, -1)))] : [];
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <div className="flex flex-col h-full gap-4">
       {/* Stats bar */}
-      <div className="flex flex-wrap items-center justify-between bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 mb-4 gap-3">
-        <div className="flex items-center gap-6 text-sm text-slate-500">
-          <span>Документов: <strong className="text-slate-900 dark:text-white">{stats?.indexedDocuments ?? 0}</strong></span>
-          <span>Чанков: <strong className="text-slate-900 dark:text-white">{stats?.totalChunks ?? 0}</strong></span>
-          <span>Всего файлов: <strong className="text-slate-900 dark:text-white">{stats?.totalUploads ?? 0}</strong></span>
-        </div>
+      <div className="flex flex-wrap gap-3 items-center">
+        {stats ? (
+          <>
+            <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-3 py-1 rounded-full">
+              📄 Документов: {stats.indexedDocuments}
+            </span>
+            <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-3 py-1 rounded-full">
+              🧩 Чанков: {stats.totalChunks}
+            </span>
+            <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-3 py-1 rounded-full">
+              📁 Загрузок: {stats.totalUploads}
+            </span>
+          </>
+        ) : (
+          <span className="text-xs text-slate-400">Загрузка статистики...</span>
+        )}
         <button
-          onClick={handleIndex}
+          onClick={handleIndexAll}
           disabled={indexing}
-          className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium transition-colors"
+          className="ml-auto text-xs px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium"
         >
-          {indexing ? "Индексация..." : "Переиндексировать"}
+          {indexing ? "Индексация..." : "🔄 Переиндексировать"}
         </button>
       </div>
 
       {indexResult && (
-        <div className="mb-4 text-sm text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-4 py-2">
+        <div className="text-sm px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">
           {indexResult}
         </div>
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 mb-4 space-y-4">
+      <div className="flex-1 overflow-y-auto flex flex-col gap-3 min-h-0">
         {messages.length === 0 && (
-          <div className="text-center text-slate-400 py-12">
-            <div className="text-4xl mb-4">🤖</div>
-            <p className="text-lg font-medium mb-1">AI Ассистент</p>
-            <p className="text-sm">Задайте вопрос по вашим документам из Google Drive</p>
+          <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
+            <span className="text-4xl">🤖</span>
+            <p className="text-sm text-center max-w-xs">
+              Задайте вопрос по вашим документам. RAG-ассистент найдёт релевантные фрагменты и сгенерирует ответ.
+            </p>
           </div>
         )}
 
-        {messages.map((m) => (
-          <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-              m.role === "user"
-                ? "bg-blue-600 text-white"
-                : "bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-white"
-            }`}>
-              <div className="text-sm whitespace-pre-wrap">{m.content || "..."}</div>
-              {m.role === "assistant" && m.content && (() => {
-                const sources = extractSources(m.content);
-                return sources.length > 0 ? (
-                  <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-600">
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">Источники:</p>
-                    <div className="flex flex-wrap gap-1">
-                      {sources.map((s) => (
-                        <span key={s} className="text-xs bg-slate-200 dark:bg-slate-600 rounded px-2 py-0.5 text-slate-600 dark:text-slate-300">{s}</span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null;
-              })()}
+        {messages.map((msg) => (
+          <div
+            key={msg.id}
+            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+          >
+            <div
+              className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm whitespace-pre-wrap ${
+                msg.role === "user"
+                  ? "bg-blue-600 text-white rounded-br-sm"
+                  : "bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 rounded-bl-sm"
+              }`}
+            >
+              {msg.content}
             </div>
           </div>
         ))}
 
-        {isLoading && messages.length > 0 && messages[messages.length - 1]?.role === "user" && (
+        {isLoading && (
           <div className="flex justify-start">
-            <div className="bg-slate-100 dark:bg-slate-700 rounded-2xl px-4 py-3">
+            <div className="bg-slate-100 dark:bg-slate-700 rounded-2xl rounded-bl-sm px-4 py-3">
               <div className="flex gap-1">
                 <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
                 <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
                 <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
               </div>
             </div>
-          </div>
-        )}
-
-        {error && (
-          <div className="text-red-500 text-sm bg-red-50 dark:bg-red-900/20 rounded-lg px-4 py-2">
-            Ошибка: {error}
           </div>
         )}
 
@@ -205,13 +190,13 @@ export default function ChatClient() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Задайте вопрос по документам..."
-          className="flex-1 px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+          className="flex-1 px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           disabled={isLoading}
         />
         <button
           type="submit"
           disabled={isLoading || !input.trim()}
-          className="px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium transition-colors text-sm"
+          className="px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium text-sm"
         >
           Отправить
         </button>
