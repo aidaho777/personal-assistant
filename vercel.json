@@ -5,6 +5,12 @@
     },
     "src/app/api/health/route.ts": {
       "maxDuration": 10
+    },
+    "src/app/api/rag/chat/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/rag/index/route.ts": {
+      "maxDuration": 60
     }
   }
 }

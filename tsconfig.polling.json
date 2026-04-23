@@ -9,7 +9,7 @@
     "module": "commonjs",
     "moduleResolution": "node",
     "resolveJsonModule": true,
-    "outDir": ".",
+    "outDir": "dist",
     "rootDir": ".",
     "baseUrl": ".",
     "paths": {
@@ -22,6 +22,7 @@
     "src/services/google-drive.ts",
     "src/services/user-service.ts",
     "src/services/upload-service.ts",
+    "src/services/yandex-speechkit.ts",
     "src/lib/env.ts",
     "src/lib/helpers.ts",
     "src/db/index.ts",

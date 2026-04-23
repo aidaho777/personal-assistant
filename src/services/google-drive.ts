@@ -110,6 +110,15 @@ export async function uploadFileToDrive(
 
 // ─── Health check ───────────────────────────────────────────────────────
 
+export async function downloadFileFromDrive(fileId: string): Promise<Buffer> {
+  const drive = getDrive();
+  const res = await drive.files.get(
+    { fileId, alt: "media" },
+    { responseType: "arraybuffer" }
+  );
+  return Buffer.from(res.data as ArrayBuffer);
+}
+
 /**
  * Verify Google Drive connection by listing root folder.
  */
