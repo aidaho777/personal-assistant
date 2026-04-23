@@ -13,7 +13,7 @@ export async function GET() {
 
   try {
     // Count indexed documents (uploads that have chunks) for this web user
-    const indexedResult = await db.execute(sql.raw(`
+    const indexedResult: any = await db.execute(sql.raw(`
       SELECT COUNT(DISTINCT dc.upload_id) as count
       FROM document_chunks dc
       JOIN uploads u ON dc.upload_id = u.id
@@ -22,7 +22,7 @@ export async function GET() {
     `));
 
     // Count total chunks
-    const chunksResult = await db.execute(sql.raw(`
+    const chunksResult: any = await db.execute(sql.raw(`
       SELECT COUNT(*) as count
       FROM document_chunks dc
       JOIN uploads u ON dc.upload_id = u.id
@@ -31,16 +31,19 @@ export async function GET() {
     `));
 
     // Count total uploads for this web user
-    const uploadsResult = await db.execute(sql.raw(`
+    const uploadsResult: any = await db.execute(sql.raw(`
       SELECT COUNT(*) as count
       FROM uploads u
       JOIN web_users wu ON wu.telegram_user_id = u.user_id
       WHERE wu.id = '${session.user.id}'
     `));
 
-    const indexedDocuments = Number((indexedResult.rows?.[0] as { count?: string })?.count ?? 0);
-    const totalChunks = Number((chunksResult.rows?.[0] as { count?: string })?.count ?? 0);
-    const totalUploads = Number((uploadsResult.rows?.[0] as { count?: string })?.count ?? 0);
+    const indexedRows = Array.isArray(indexedResult) ? indexedResult : (indexedResult.rows ?? []);
+    const chunksRows = Array.isArray(chunksResult) ? chunksResult : (chunksResult.rows ?? []);
+    const uploadsRows = Array.isArray(uploadsResult) ? uploadsResult : (uploadsResult.rows ?? []);
+    const indexedDocuments = Number(indexedRows[0]?.count ?? 0);
+    const totalChunks = Number(chunksRows[0]?.count ?? 0);
+    const totalUploads = Number(uploadsRows[0]?.count ?? 0);
 
     return NextResponse.json({ indexedDocuments, totalChunks, totalUploads });
   } catch (error) {
