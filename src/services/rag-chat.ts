@@ -1,5 +1,3 @@
-import { streamText } from "ai";
-import { openai } from "@ai-sdk/openai";
 import type { SearchResult } from "./rag-search";
 
 const SYSTEM_PROMPT = `Ты — персональный ассистент. Отвечай на вопросы используя предоставленный контекст из документов пользователя.
@@ -17,18 +15,36 @@ function buildContext(chunks: SearchResult[]): string {
     .join("\n\n");
 }
 
-export function generateAnswer(query: string, chunks: SearchResult[]) {
+export async function generateAnswer(query: string, chunks: SearchResult[]): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
+
   const context = buildContext(chunks);
 
-  return streamText({
-    model: openai("gpt-4o-mini"),
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: `Контекст из документов:\n\n${context}\n\n---\n\nВопрос: ${query}`,
-      },
-    ],
-    maxOutputTokens: 1024,
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `Контекст из документов:\n\n${context}\n\n---\n\nВопрос: ${query}`,
+        },
+      ],
+      max_tokens: 1024,
+    }),
   });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`OpenAI chat error: ${err}`);
+  }
+
+  const data = (await res.json()) as { choices: { message: { content: string } }[] };
+  return data.choices[0].message.content;
 }
