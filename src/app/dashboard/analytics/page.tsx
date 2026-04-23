@@ -1,7 +1,7 @@
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
-import FunnelContent from "./FunnelContent";
+import AARRRContent from "./AARRRContent";
 
 export default async function AnalyticsPage() {
   const session = await auth();
@@ -10,7 +10,7 @@ export default async function AnalyticsPage() {
     <div>
       <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-6">Analytics</h1>
       <Suspense fallback={<div className="text-slate-400">Загрузка...</div>}>
-        <FunnelContent />
+        <AARRRContent />
       </Suspense>
     </div>
   );
