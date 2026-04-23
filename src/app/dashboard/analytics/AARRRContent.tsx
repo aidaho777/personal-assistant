@@ -1,5 +1,5 @@
 import { db, schema } from "@/db";
-import { sql, and, gte, lte, eq } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 
 const { webUsers, uploads, users } = schema;
 
@@ -7,11 +7,12 @@ const { webUsers, uploads, users } = schema;
 
 async function getAARRRData() {
   const now = new Date();
-  const d7 = new Date(now.getTime() - 7 * 86400_000);
-  const d14 = new Date(now.getTime() - 14 * 86400_000);
-  const d30 = new Date(now.getTime() - 30 * 86400_000);
-  const d60 = new Date(now.getTime() - 60 * 86400_000);
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  // Use ISO strings to avoid TypeError: "string" argument must be of type string
+  const d7 = new Date(now.getTime() - 7 * 86400_000).toISOString();
+  const d14 = new Date(now.getTime() - 14 * 86400_000).toISOString();
+  const d30 = new Date(now.getTime() - 30 * 86400_000).toISOString();
+  const d60 = new Date(now.getTime() - 60 * 86400_000).toISOString();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
 
   const [
     // Acquisition
@@ -114,10 +115,11 @@ async function getAARRRData() {
   const telegramLinkRate = totalWebUsers > 0 ? Math.round((activatedUsers / totalWebUsers) * 100) : 0;
 
   // Fill daily chart gaps
+  const nowDate = new Date();
   const dailyMap = new Map(dailyActivity.map(r => [r.date, r.count]));
   const dailyChart: { date: string; count: number }[] = [];
   for (let i = 29; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 86400_000);
+    const d = new Date(nowDate.getTime() - i * 86400_000);
     const key = d.toISOString().slice(0, 10);
     dailyChart.push({ date: key, count: dailyMap.get(key) ?? 0 });
   }
@@ -421,7 +423,7 @@ export default async function AARRRContent() {
               </div>
               <div>
                 <div className="flex justify-between text-sm mb-1">
-                  <span className="text-slate-600 dark:text-slate-400">Power users (20+)</span>
+                  <span className="text-slate-600 dark:text-slate-400">Power users (20+ загрузок)</span>
                   <span className="font-medium">{d.powerUsers}</span>
                 </div>
                 <ProgressBar value={d.powerUsers} max={d.totalTelegramUsers} color="orange" />
