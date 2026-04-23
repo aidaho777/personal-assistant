@@ -8,6 +8,8 @@ import {
   integer,
   text,
   index,
+  jsonb,
+  vector,
 } from "drizzle-orm/pg-core";
 
 // ─── users table (whitelist) ───────────────────────────────────────────
@@ -65,6 +67,38 @@ export const webUsers = pgTable("web_users", {
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
 });
 
+// ─── document_chunks table (RAG vector store) ─────────────────────────
+export const documentChunks = pgTable(
+  "document_chunks",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    uploadId: uuid("upload_id")
+      .notNull()
+      .references(() => uploads.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    content: text("content").notNull(),
+    embedding: vector("embedding", { dimensions: 1536 }).notNull(),
+    metadata: jsonb("metadata").$type<{
+      fileName?: string;
+      tag?: string;
+      page?: number;
+      position?: number;
+      [key: string]: unknown;
+    }>(),
+    chunkIndex: integer("chunk_index").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    uploadIdIdx: index("document_chunks_upload_id_idx").on(table.uploadId),
+    userIdIdx: index("document_chunks_user_id_idx").on(table.userId),
+    embeddingIdx: index("document_chunks_embedding_idx")
+      .using("ivfflat", table.embedding.op("vector_cosine_ops"))
+      .with({ lists: 100 }),
+  })
+);
+
 // ─── Type helpers ──────────────────────────────────────────────────────
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
@@ -72,3 +106,5 @@ export type Upload = typeof uploads.$inferSelect;
 export type NewUpload = typeof uploads.$inferInsert;
 export type WebUser = typeof webUsers.$inferSelect;
 export type NewWebUser = typeof webUsers.$inferInsert;
+export type DocumentChunk = typeof documentChunks.$inferSelect;
+export type NewDocumentChunk = typeof documentChunks.$inferInsert;

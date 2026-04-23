@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.webUsers = exports.uploads = exports.users = void 0;
+exports.documentChunks = exports.webUsers = exports.uploads = exports.users = void 0;
 const pg_core_1 = require("drizzle-orm/pg-core");
 // ─── users table (whitelist) ───────────────────────────────────────────
 exports.users = (0, pg_core_1.pgTable)("users", {
@@ -50,3 +50,24 @@ exports.webUsers = (0, pg_core_1.pgTable)("web_users", {
     createdAt: (0, pg_core_1.timestamp)("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastLoginAt: (0, pg_core_1.timestamp)("last_login_at", { withTimezone: true }),
 });
+// ─── document_chunks table (RAG vector store) ─────────────────────────
+exports.documentChunks = (0, pg_core_1.pgTable)("document_chunks", {
+    id: (0, pg_core_1.uuid)("id").defaultRandom().primaryKey(),
+    uploadId: (0, pg_core_1.uuid)("upload_id")
+        .notNull()
+        .references(() => exports.uploads.id, { onDelete: "cascade" }),
+    userId: (0, pg_core_1.uuid)("user_id")
+        .notNull()
+        .references(() => exports.users.id),
+    content: (0, pg_core_1.text)("content").notNull(),
+    embedding: (0, pg_core_1.vector)("embedding", { dimensions: 1536 }).notNull(),
+    metadata: (0, pg_core_1.jsonb)("metadata").$type(),
+    chunkIndex: (0, pg_core_1.integer)("chunk_index").notNull(),
+    createdAt: (0, pg_core_1.timestamp)("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+    uploadIdIdx: (0, pg_core_1.index)("document_chunks_upload_id_idx").on(table.uploadId),
+    userIdIdx: (0, pg_core_1.index)("document_chunks_user_id_idx").on(table.userId),
+    embeddingIdx: (0, pg_core_1.index)("document_chunks_embedding_idx")
+        .using("ivfflat", table.embedding.op("vector_cosine_ops"))
+        .with({ lists: 100 }),
+}));
