@@ -1,11 +1,26 @@
-import OpenAI from "openai";
 import { db } from "@/db";
 import { sql } from "drizzle-orm";
 
-function getOpenAI() {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error("OPENAI_API_KEY is not set");
-  return new OpenAI({ apiKey: key });
+async function getEmbedding(text: string): Promise<number[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
+
+  const res = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({ model: "text-embedding-3-small", input: text }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`OpenAI embeddings error: ${err}`);
+  }
+
+  const data = (await res.json()) as { data: { embedding: number[] }[] };
+  return data.data[0].embedding;
 }
 
 export interface SearchResult {
@@ -24,25 +39,20 @@ export async function searchDocuments(
   userId: string,
   limit = 5
 ): Promise<SearchResult[]> {
-  const openai = getOpenAI();
-
-  const embRes = await openai.embeddings.create({
-    model: "text-embedding-3-small",
-    input: query,
-  });
-  const queryEmbedding = embRes.data[0].embedding;
+  const queryEmbedding = await getEmbedding(query);
   const embeddingStr = `[${queryEmbedding.join(",")}]`;
 
-  const results = await db.execute(sql`
+  const results: any = await db.execute(sql.raw(`
     SELECT
       content,
       metadata,
-      1 - (embedding <=> ${embeddingStr}::vector) as similarity
+      1 - (embedding <=> '${embeddingStr}'::vector) as similarity
     FROM document_chunks
-    WHERE user_id = ${userId}
-    ORDER BY embedding <=> ${embeddingStr}::vector
+    WHERE user_id = '${userId}'
+    ORDER BY embedding <=> '${embeddingStr}'::vector
     LIMIT ${limit}
-  `);
+  `));
 
-  return results as unknown as SearchResult[];
+  const rows = Array.isArray(results) ? results : (results.rows ?? []);
+  return rows as SearchResult[];
 }
