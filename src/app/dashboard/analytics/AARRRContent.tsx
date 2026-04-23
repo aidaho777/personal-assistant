@@ -18,7 +18,7 @@ async function getAARRRData() {
     return Number(r.rows?.[0]?.c ?? r[0]?.c ?? 0);
   };
 
-  const rows = async <T>(rawSql: string): Promise<T[]> => {
+  const rows = async <T,>(rawSql: string): Promise<T[]> => {
     const r: any = await db.execute(sql.raw(rawSql));
     return (r.rows ?? r) as T[];
   };
