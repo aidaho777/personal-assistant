@@ -220,14 +220,14 @@ export default function ChatClient() {
             Загрузить документ для RAG
           </p>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Поддерживаются: TXT, MD, PDF (до 10MB). После загрузки документ будет
+            Поддерживаются: TXT, MD, PDF, DOCX, DOC, RTF, CSV, JSON (до 30MB). После загрузки документ будет
             автоматически проиндексирован.
           </p>
           <div className="flex gap-2 items-center">
             <input
               ref={fileInputRef}
               type="file"
-              accept=".txt,.md,.pdf,text/plain,application/pdf"
+              accept=".txt,.md,.pdf,.docx,.doc,.rtf,.csv,.json,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,application/rtf,text/csv,application/json"
               onChange={handleFileUpload}
               disabled={uploading}
               className="text-sm text-slate-600 dark:text-slate-300 file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-blue-600 file:text-white hover:file:bg-blue-500 disabled:opacity-50"
