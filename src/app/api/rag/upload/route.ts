@@ -4,11 +4,19 @@ import { db } from "@/db";
 import { sql } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 120;
+
+// Max ~1500 tokens per chunk (safe for text-embedding-3-small which supports 8192)
+// 300 words ≈ 400-600 tokens for English, ~600-900 for Russian
+const CHUNK_SIZE_WORDS = 300;
+const CHUNK_OVERLAP_WORDS = 30;
 
 async function getEmbedding(text: string): Promise<number[]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
+
+  // Truncate text to ~6000 chars to stay safely under 8192 tokens
+  const safeText = text.slice(0, 6000);
 
   const res = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
@@ -16,7 +24,7 @@ async function getEmbedding(text: string): Promise<number[]> {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({ model: "text-embedding-3-small", input: text }),
+    body: JSON.stringify({ model: "text-embedding-3-small", input: safeText }),
   });
 
   if (!res.ok) {
@@ -28,15 +36,22 @@ async function getEmbedding(text: string): Promise<number[]> {
   return data.data[0].embedding;
 }
 
-function chunkText(text: string, chunkSize = 500, overlap = 50): string[] {
-  const words = text.split(/\s+/);
+function chunkText(
+  text: string,
+  chunkSize = CHUNK_SIZE_WORDS,
+  overlap = CHUNK_OVERLAP_WORDS
+): string[] {
+  const words = text.split(/\s+/).filter((w) => w.length > 0);
   const chunks: string[] = [];
   let i = 0;
   while (i < words.length) {
-    chunks.push(words.slice(i, i + chunkSize).join(" "));
+    const chunk = words.slice(i, i + chunkSize).join(" ");
+    if (chunk.trim().length > 20) {
+      chunks.push(chunk);
+    }
     i += chunkSize - overlap;
   }
-  return chunks.filter((c) => c.trim().length > 20);
+  return chunks;
 }
 
 async function extractTextFromFile(
@@ -44,26 +59,88 @@ async function extractTextFromFile(
   mimeType: string,
   fileName: string
 ): Promise<string> {
-  // For plain text files
+  const lowerName = fileName.toLowerCase();
+
+  // Plain text, markdown, CSV
   if (
     mimeType === "text/plain" ||
-    fileName.endsWith(".txt") ||
-    fileName.endsWith(".md")
+    mimeType === "text/markdown" ||
+    mimeType === "text/csv" ||
+    lowerName.endsWith(".txt") ||
+    lowerName.endsWith(".md") ||
+    lowerName.endsWith(".csv") ||
+    lowerName.endsWith(".json")
   ) {
     return buffer.toString("utf-8");
   }
 
-  // For PDF files - extract text using basic approach
-  if (mimeType === "application/pdf" || fileName.endsWith(".pdf")) {
-    const text = buffer.toString("latin1");
-    // Extract readable text from PDF (basic extraction)
-    const matches = text.match(/\(([^)]{3,})\)/g) ?? [];
-    const extracted = matches
-      .map((m) => m.slice(1, -1))
-      .filter((s) => /[a-zA-Zа-яА-Я]/.test(s))
-      .join(" ");
-    if (extracted.length > 50) return extracted;
-    // Fallback: return filename as placeholder
+  // DOCX files using mammoth
+  if (
+    mimeType ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    lowerName.endsWith(".docx")
+  ) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mammoth = require("mammoth");
+      const result = await mammoth.extractRawText({ buffer });
+      if (result.value && result.value.trim().length > 10) {
+        return result.value;
+      }
+    } catch (e) {
+      console.error("mammoth error:", e);
+    }
+    return `Документ: ${fileName}`;
+  }
+
+  // DOC files (old Word format) - basic extraction
+  if (mimeType === "application/msword" || lowerName.endsWith(".doc")) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mammoth = require("mammoth");
+      const result = await mammoth.extractRawText({ buffer });
+      if (result.value && result.value.trim().length > 10) {
+        return result.value;
+      }
+    } catch (e) {
+      console.error("mammoth doc error:", e);
+    }
+    return `Документ: ${fileName}`;
+  }
+
+  // PDF files using pdf-parse
+  if (mimeType === "application/pdf" || lowerName.endsWith(".pdf")) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const pdfParse = require("pdf-parse");
+      const data = await pdfParse(buffer);
+      if (data.text && data.text.trim().length > 10) {
+        return data.text;
+      }
+    } catch (e) {
+      console.error("pdf-parse error:", e);
+      // Fallback: basic text extraction from PDF binary
+      const text = buffer.toString("latin1");
+      const matches = text.match(/\(([^)]{3,})\)/g) ?? [];
+      const extracted = matches
+        .map((m) => m.slice(1, -1))
+        .filter((s) => /[a-zA-Zа-яА-Я]/.test(s))
+        .join(" ");
+      if (extracted.length > 50) return extracted;
+    }
+    return `Документ: ${fileName}`;
+  }
+
+  // RTF files - basic text extraction
+  if (mimeType === "application/rtf" || lowerName.endsWith(".rtf")) {
+    const text = buffer.toString("utf-8");
+    // Strip RTF control words
+    const stripped = text
+      .replace(/\\[a-z]+\d*\s?/g, " ")
+      .replace(/[{}\\]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (stripped.length > 20) return stripped;
     return `Документ: ${fileName}`;
   }
 
@@ -80,6 +157,9 @@ export async function POST(req: NextRequest) {
   const webUserId = session.user.id;
 
   try {
+    // Ensure pgvector extension exists
+    await db.execute(sql.raw(`CREATE EXTENSION IF NOT EXISTS vector`));
+
     // Ensure web_document_chunks table exists
     await db.execute(sql.raw(`
       CREATE TABLE IF NOT EXISTS web_document_chunks (
@@ -94,9 +174,6 @@ export async function POST(req: NextRequest) {
       )
     `));
 
-    // Ensure pgvector extension exists
-    await db.execute(sql.raw(`CREATE EXTENSION IF NOT EXISTS vector`));
-
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
 
@@ -104,10 +181,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
-    const maxSize = 10 * 1024 * 1024; // 10MB
+    const maxSize = 30 * 1024 * 1024; // 30MB
     if (file.size > maxSize) {
       return NextResponse.json(
-        { error: "File too large. Max size is 10MB." },
+        { error: "File too large. Max size is 30MB." },
+        { status: 400 }
+      );
+    }
+
+    // Supported formats
+    const supportedExtensions = [
+      ".txt", ".md", ".csv", ".json",
+      ".pdf",
+      ".docx", ".doc",
+      ".rtf",
+    ];
+    const lowerName = file.name.toLowerCase();
+    const isSupported = supportedExtensions.some((ext) =>
+      lowerName.endsWith(ext)
+    );
+    if (!isSupported) {
+      return NextResponse.json(
+        {
+          error: `Unsupported file format. Supported: ${supportedExtensions.join(", ")}`,
+        },
         { status: 400 }
       );
     }
@@ -144,41 +241,52 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Index each chunk
+    // Index each chunk with embedding
     let indexed = 0;
+    const errors: string[] = [];
+
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const embedding = await getEmbedding(chunk);
-      const embeddingStr = `[${embedding.join(",")}]`;
-      const metadataStr = JSON.stringify({
-        fileName,
-        mimeType,
-        position: i,
-        totalChunks: chunks.length,
-      }).replace(/'/g, "''");
+      try {
+        const embedding = await getEmbedding(chunk);
+        const embeddingStr = `[${embedding.join(",")}]`;
+        const metadataStr = JSON.stringify({
+          fileName,
+          mimeType,
+          position: i,
+          totalChunks: chunks.length,
+        }).replace(/'/g, "''");
 
-      await db.execute(
-        sql.raw(`
-        INSERT INTO web_document_chunks (id, web_user_id, file_name, content, embedding, metadata, chunk_index)
-        VALUES (
-          gen_random_uuid(),
-          '${webUserId}',
-          '${fileName.replace(/'/g, "''")}',
-          '${chunk.replace(/'/g, "''")}',
-          '${embeddingStr}'::vector,
-          '${metadataStr}'::jsonb,
-          ${i}
-        )
-      `)
-      );
-      indexed++;
+        await db.execute(
+          sql.raw(`
+          INSERT INTO web_document_chunks (id, web_user_id, file_name, content, embedding, metadata, chunk_index)
+          VALUES (
+            gen_random_uuid(),
+            '${webUserId}',
+            '${fileName.replace(/'/g, "''")}',
+            '${chunk.replace(/'/g, "''")}',
+            '${embeddingStr}'::vector,
+            '${metadataStr}'::jsonb,
+            ${i}
+          )
+        `)
+        );
+        indexed++;
+      } catch (chunkErr) {
+        const msg =
+          chunkErr instanceof Error ? chunkErr.message : String(chunkErr);
+        errors.push(`Chunk ${i}: ${msg}`);
+        console.error(`Error indexing chunk ${i}:`, chunkErr);
+      }
     }
 
     return NextResponse.json({
       success: true,
       fileName,
       chunks: indexed,
+      totalChunks: chunks.length,
       characters: text.length,
+      errors: errors.length > 0 ? errors : undefined,
     });
   } catch (error) {
     console.error("RAG upload error:", error);
