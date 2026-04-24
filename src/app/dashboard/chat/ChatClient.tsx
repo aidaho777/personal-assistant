@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, type FormEvent } from "react";
+import { useState, useRef, useEffect, type FormEvent, type ChangeEvent } from "react";
 
 interface Message {
   id: string;
@@ -12,6 +12,8 @@ interface RagStats {
   indexedDocuments: number;
   totalChunks: number;
   totalUploads: number;
+  webDocuments?: number;
+  webChunks?: number;
 }
 
 export default function ChatClient() {
@@ -21,14 +23,23 @@ export default function ChatClient() {
   const [stats, setStats] = useState<RagStats | null>(null);
   const [indexing, setIndexing] = useState(false);
   const [indexResult, setIndexResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState<string | null>(null);
+  const [showUpload, setShowUpload] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const refreshStats = () => {
+    fetch("/api/rag/stats")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) setStats(data as RagStats);
+      })
+      .catch(() => {});
+  };
 
   useEffect(() => {
-    fetch("/api/rag/stats")
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => { if (data) setStats(data as RagStats); })
-      .catch(() => {});
+    refreshStats();
   }, []);
 
   useEffect(() => {
@@ -40,11 +51,14 @@ export default function ChatClient() {
     const text = input.trim();
     if (!text || isLoading) return;
 
-    const userMsg: Message = { id: Date.now().toString(), role: "user", content: text };
+    const userMsg: Message = {
+      id: Date.now().toString(),
+      role: "user",
+      content: text,
+    };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setIsLoading(true);
-    setError(null);
 
     try {
       const res = await fetch("/api/rag/chat", {
@@ -53,27 +67,40 @@ export default function ChatClient() {
         body: JSON.stringify({ message: text }),
       });
 
-      const data = await res.json() as { answer?: string; error?: string; message?: string };
+      const data = (await res.json()) as {
+        answer?: string;
+        error?: string;
+        message?: string;
+      };
 
       if (!res.ok) {
         const errMsg = data.message || data.error || "Ошибка сервера";
-        setError(errMsg);
         setMessages((prev) => [
           ...prev,
-          { id: Date.now().toString(), role: "assistant", content: `⚠️ ${errMsg}` },
+          {
+            id: Date.now().toString(),
+            role: "assistant",
+            content: `⚠️ ${errMsg}`,
+          },
         ]);
       } else {
         setMessages((prev) => [
           ...prev,
-          { id: Date.now().toString(), role: "assistant", content: data.answer ?? "" },
+          {
+            id: Date.now().toString(),
+            role: "assistant",
+            content: data.answer ?? "",
+          },
         ]);
       }
     } catch {
-      const msg = "Не удалось подключиться к серверу";
-      setError(msg);
       setMessages((prev) => [
         ...prev,
-        { id: Date.now().toString(), role: "assistant", content: `⚠️ ${msg}` },
+        {
+          id: Date.now().toString(),
+          role: "assistant",
+          content: "⚠️ Не удалось подключиться к серверу",
+        },
       ]);
     } finally {
       setIsLoading(false);
@@ -89,21 +116,62 @@ export default function ChatClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ all: true }),
       });
-      const data = await res.json() as { indexed?: number; message?: string; error?: string };
+      const data = (await res.json()) as {
+        indexed?: number;
+        message?: string;
+        error?: string;
+      };
       if (res.ok) {
-        setIndexResult(`✅ Проиндексировано документов: ${data.indexed ?? 0}`);
-        // Refresh stats
-        fetch("/api/rag/stats")
-          .then((r) => r.ok ? r.json() : null)
-          .then((d) => { if (d) setStats(d as RagStats); })
-          .catch(() => {});
+        setIndexResult(`✅ Проиндексировано из Telegram: ${data.indexed ?? 0}`);
+        refreshStats();
       } else {
-        setIndexResult(`❌ Ошибка: ${data.error ?? data.message ?? "неизвестная ошибка"}`);
+        setIndexResult(`❌ ${data.error ?? data.message ?? "неизвестная ошибка"}`);
       }
     } catch {
       setIndexResult("❌ Не удалось запустить индексацию");
     } finally {
       setIndexing(false);
+    }
+  }
+
+  async function handleFileUpload(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    setUploadResult(null);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await fetch("/api/rag/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = (await res.json()) as {
+        success?: boolean;
+        fileName?: string;
+        chunks?: number;
+        error?: string;
+        message?: string;
+      };
+
+      if (res.ok && data.success) {
+        setUploadResult(
+          `✅ Загружен "${data.fileName}" — ${data.chunks} чанков проиндексировано`
+        );
+        refreshStats();
+      } else {
+        setUploadResult(`❌ ${data.message ?? data.error ?? "Ошибка загрузки"}`);
+      }
+    } catch {
+      setUploadResult("❌ Не удалось загрузить файл");
+    } finally {
+      setUploading(false);
+      // Reset file input
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
@@ -119,21 +187,64 @@ export default function ChatClient() {
             <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-3 py-1 rounded-full">
               🧩 Чанков: {stats.totalChunks}
             </span>
-            <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-3 py-1 rounded-full">
-              📁 Загрузок: {stats.totalUploads}
-            </span>
+            {stats.totalUploads > 0 && (
+              <span className="text-xs bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-3 py-1 rounded-full">
+                📁 Telegram: {stats.totalUploads}
+              </span>
+            )}
           </>
         ) : (
           <span className="text-xs text-slate-400">Загрузка статистики...</span>
         )}
-        <button
-          onClick={handleIndexAll}
-          disabled={indexing}
-          className="ml-auto text-xs px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium"
-        >
-          {indexing ? "Индексация..." : "🔄 Переиндексировать"}
-        </button>
+        <div className="ml-auto flex gap-2">
+          <button
+            onClick={() => setShowUpload((v) => !v)}
+            className="text-xs px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
+          >
+            📎 Загрузить документ
+          </button>
+          <button
+            onClick={handleIndexAll}
+            disabled={indexing}
+            className="text-xs px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium"
+          >
+            {indexing ? "Индексация..." : "🔄 Telegram"}
+          </button>
+        </div>
       </div>
+
+      {/* Upload panel */}
+      {showUpload && (
+        <div className="flex flex-col gap-2 p-4 rounded-xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-800">
+          <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+            Загрузить документ для RAG
+          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Поддерживаются: TXT, MD, PDF (до 10MB). После загрузки документ будет
+            автоматически проиндексирован.
+          </p>
+          <div className="flex gap-2 items-center">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".txt,.md,.pdf,text/plain,application/pdf"
+              onChange={handleFileUpload}
+              disabled={uploading}
+              className="text-sm text-slate-600 dark:text-slate-300 file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-blue-600 file:text-white hover:file:bg-blue-500 disabled:opacity-50"
+            />
+            {uploading && (
+              <span className="text-xs text-slate-400 animate-pulse">
+                Загрузка и индексация...
+              </span>
+            )}
+          </div>
+          {uploadResult && (
+            <p className="text-xs text-slate-600 dark:text-slate-300">
+              {uploadResult}
+            </p>
+          )}
+        </div>
+      )}
 
       {indexResult && (
         <div className="text-sm px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">
@@ -147,7 +258,9 @@ export default function ChatClient() {
           <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
             <span className="text-4xl">🤖</span>
             <p className="text-sm text-center max-w-xs">
-              Задайте вопрос по вашим документам. RAG-ассистент найдёт релевантные фрагменты и сгенерирует ответ.
+              Загрузите документы через кнопку{" "}
+              <strong>📎 Загрузить документ</strong> и задайте вопрос.
+              RAG-ассистент найдёт релевантные фрагменты и сгенерирует ответ.
             </p>
           </div>
         )}
@@ -173,9 +286,18 @@ export default function ChatClient() {
           <div className="flex justify-start">
             <div className="bg-slate-100 dark:bg-slate-700 rounded-2xl rounded-bl-sm px-4 py-3">
               <div className="flex gap-1">
-                <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                <div
+                  className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"
+                  style={{ animationDelay: "0ms" }}
+                />
+                <div
+                  className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"
+                  style={{ animationDelay: "150ms" }}
+                />
+                <div
+                  className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"
+                  style={{ animationDelay: "300ms" }}
+                />
               </div>
             </div>
           </div>
