@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.2",
+    "@hello-pangea/dnd": "^18.0.1",
     "bcryptjs": "^3.0.3",
     "crypto": "^1.0.1",
     "dotenv": "^16.4.0",

@@ -23,6 +23,8 @@ import {
   formatSize,
 } from "../lib/helpers";
 import { recognizeSpeech } from "./yandex-speechkit";
+import { extractTask } from "./task-extractor";
+import { db, schema } from "../db";
 import type { User } from "../db/schema";
 
 // ─── Bot singleton ──────────────────────────────────────────────────────
@@ -262,6 +264,26 @@ function registerHandlers(bot: Telegraf) {
         `✅ Заметка сохранена в папку \`${tag}\`\n🔗 [Открыть в Drive](${result.webViewLink})`,
         { parse_mode: "Markdown", link_preview_options: { is_disabled: true } }
       );
+
+      try {
+        const taskResult = await extractTask(text);
+        if (taskResult.isTask && taskResult.title) {
+          await db.insert(schema.tasks).values({
+            userId: user.id,
+            title: taskResult.title,
+            description: taskResult.description ?? null,
+            dueDate: taskResult.dueDate ? new Date(taskResult.dueDate) : new Date(),
+            status: "todo",
+            category: "task",
+          });
+          const dateStr = taskResult.dueDate
+            ? new Date(taskResult.dueDate).toLocaleDateString("ru-RU")
+            : "сегодня";
+          await ctx.reply(`📌 Задача добавлена: "${taskResult.title}" на ${dateStr}`);
+        }
+      } catch (taskErr) {
+        console.error("[Collector] Task extraction error:", taskErr);
+      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : "Unknown error";
       await updateUploadRecord(record.id, { status: "error", errorMessage: errMsg });
@@ -340,6 +362,27 @@ async function processFile(ctx: Context, user: User, input: FileInput) {
           await uploadFileToDrive(txtBuffer, txtName, "text/plain", folderId);
         } catch (uploadErr) {
           console.error("[Collector] Error uploading transcription:", uploadErr);
+        }
+
+        try {
+          const taskResult = await extractTask(transcriptionText);
+          if (taskResult.isTask && taskResult.title) {
+            const user = (ctx as unknown as AuthContext).dbUser;
+            await db.insert(schema.tasks).values({
+              userId: user.id,
+              title: taskResult.title,
+              description: taskResult.description ?? null,
+              dueDate: taskResult.dueDate ? new Date(taskResult.dueDate) : new Date(),
+              status: "todo",
+              category: "task",
+            });
+            const dateStr = taskResult.dueDate
+              ? new Date(taskResult.dueDate).toLocaleDateString("ru-RU")
+              : "сегодня";
+            await ctx.reply(`📌 Задача добавлена: "${taskResult.title}" на ${dateStr}`);
+          }
+        } catch (taskErr) {
+          console.error("[Collector] Voice task extraction error:", taskErr);
         }
       }
     }
