@@ -108,6 +108,40 @@ export async function uploadFileToDrive(
   };
 }
 
+/**
+ * Create a Google Doc from plain text, converted automatically by Drive.
+ */
+export async function createGoogleDoc(
+  textContent: string,
+  fileName: string,
+  folderId: string
+): Promise<UploadResult> {
+  const drive = getDrive();
+
+  const readable = new Readable();
+  readable.push(Buffer.from(textContent, "utf-8"));
+  readable.push(null);
+
+  const file = await drive.files.create({
+    requestBody: {
+      name: fileName,
+      mimeType: "application/vnd.google-apps.document",
+      parents: [folderId],
+    },
+    media: {
+      mimeType: "text/plain",
+      body: readable,
+    },
+    fields: "id, webViewLink",
+  });
+
+  return {
+    fileId: file.data.id!,
+    folderId,
+    webViewLink: file.data.webViewLink ?? `https://docs.google.com/document/d/${file.data.id}/edit`,
+  };
+}
+
 // ─── Health check ───────────────────────────────────────────────────────
 
 export async function downloadFileFromDrive(fileId: string): Promise<Buffer> {
