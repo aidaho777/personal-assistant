@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import postgres from "postgres";
+import { extractText, getDocumentProxy } from "unpdf";
+import { fetchWithRetry } from "@/lib/fetch-with-retry";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -33,7 +35,7 @@ async function getBatchEmbeddings(texts: string[]): Promise<number[][]> {
   // Truncate each text to avoid token limit
   const safeTexts = texts.map((t) => t.slice(0, 4000));
 
-  const res = await fetch("https://api.openai.com/v1/embeddings", {
+  const res = await fetchWithRetry("https://api.openai.com/v1/embeddings", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -44,11 +46,6 @@ async function getBatchEmbeddings(texts: string[]): Promise<number[][]> {
       input: safeTexts,
     }),
   });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OpenAI embeddings error: ${err}`);
-  }
 
   const data = (await res.json()) as { data: { index: number; embedding: number[] }[] };
   // Sort by index to ensure correct order
@@ -74,27 +71,11 @@ async function extractTextFromFile(
     return buffer.toString("utf-8");
   }
 
-  // PDF — use pdfjs-dist (works in serverless, no Canvas needed)
   if (lowerName.endsWith(".pdf")) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.js");
-      pdfjsLib.GlobalWorkerOptions.workerSrc = "";
-      const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
-      const pdfDoc = await loadingTask.promise;
-      const textParts: string[] = [];
-      // Limit to first 30 pages to avoid timeout
-      const maxPages = Math.min(pdfDoc.numPages, 30);
-      for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-        const page = await pdfDoc.getPage(pageNum);
-        const content = await page.getTextContent();
-        const pageText = content.items
-          .map((item: { str?: string }) => item.str || "")
-          .join(" ");
-        textParts.push(pageText);
-      }
-      const text = textParts.join("\n");
-      if (text.trim().length > 10) return text;
+      const pdf = await getDocumentProxy(new Uint8Array(buffer));
+      const { text } = await extractText(pdf, { mergePages: true });
+      if (text && text.trim().length > 10) return text;
     } catch (e) {
       console.error("PDF parse error:", e);
     }
@@ -145,6 +126,8 @@ export async function POST(req: NextRequest) {
   const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
 
   try {
+    await sql`CREATE EXTENSION IF NOT EXISTS vector`;
+
     // Create table if not exists
     await sql`
       CREATE TABLE IF NOT EXISTS web_document_chunks (
@@ -152,15 +135,21 @@ export async function POST(req: NextRequest) {
         web_user_id UUID NOT NULL,
         file_name TEXT NOT NULL,
         content TEXT NOT NULL,
-        embedding TEXT,
+        embedding vector(1536),
         chunk_index INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `;
 
     await sql`
-      CREATE INDEX IF NOT EXISTS idx_web_doc_chunks_user 
+      CREATE INDEX IF NOT EXISTS idx_web_doc_chunks_user
       ON web_document_chunks(web_user_id)
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_web_doc_chunks_embedding
+      ON web_document_chunks
+      USING hnsw (embedding vector_cosine_ops)
     `;
 
     const formData = await req.formData();
@@ -234,7 +223,7 @@ export async function POST(req: NextRequest) {
     let indexed = 0;
     for (let i = 0; i < chunks.length; i++) {
       try {
-        const embeddingText = JSON.stringify(embeddings[i]);
+        const embeddingString = `[${embeddings[i].join(',')}]`;
         await sql`
           INSERT INTO web_document_chunks (id, web_user_id, file_name, content, embedding, chunk_index)
           VALUES (
@@ -242,7 +231,7 @@ export async function POST(req: NextRequest) {
             ${webUserId}::uuid,
             ${fileName},
             ${chunks[i]},
-            ${embeddingText},
+            ${embeddingString}::vector,
             ${i}
           )
         `;

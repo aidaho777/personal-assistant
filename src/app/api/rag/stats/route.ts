@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { db } from "@/db";
-import { sql } from "drizzle-orm";
+import postgres from "postgres";
 
 export const dynamic = "force-dynamic";
 
@@ -13,13 +12,19 @@ export async function GET() {
 
   const webUserId = session.user.id;
 
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) {
+    return NextResponse.json({ error: "DATABASE_URL is not set" }, { status: 500 });
+  }
+
+  const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
+
   try {
-    // Count web-uploaded document chunks
     let webDocuments = 0;
     let webChunks = 0;
 
     try {
-      await db.execute(sql.raw(`
+      await sql`
         CREATE TABLE IF NOT EXISTS web_document_chunks (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           web_user_id UUID NOT NULL,
@@ -30,72 +35,57 @@ export async function GET() {
           chunk_index INTEGER NOT NULL DEFAULT 0,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
-      `));
+      `;
 
-      const webResult: any = await db.execute(sql.raw(`
+      const webRows = await sql`
         SELECT
           COUNT(DISTINCT file_name) AS doc_count,
           COUNT(*) AS chunk_count
         FROM web_document_chunks
-        WHERE web_user_id = '${webUserId}'
-      `));
+        WHERE web_user_id = ${webUserId}::uuid
+      `;
 
-      const webRows = Array.isArray(webResult)
-        ? webResult
-        : (webResult.rows ?? []);
       webDocuments = parseInt(String(webRows[0]?.doc_count ?? "0"), 10);
       webChunks = parseInt(String(webRows[0]?.chunk_count ?? "0"), 10);
     } catch {
       // Table doesn't exist yet
     }
 
-    // Count Telegram-linked document chunks
     let tgDocuments = 0;
     let tgChunks = 0;
     let totalUploads = 0;
 
     try {
-      const webUserResult: any = await db.execute(
-        sql.raw(
-          `SELECT telegram_user_id FROM web_users WHERE id = '${webUserId}'`
-        )
-      );
-      const webUserRows = Array.isArray(webUserResult)
-        ? webUserResult
-        : (webUserResult.rows ?? []);
-      const telegramUserId = webUserRows[0]?.telegram_user_id as
-        | string
-        | undefined;
+      const webUserRows = await sql`
+        SELECT telegram_user_id FROM web_users WHERE id = ${webUserId}::uuid
+      `;
+      const telegramUserId = webUserRows[0]?.telegram_user_id as string | undefined;
 
       if (telegramUserId) {
-        const tgResult: any = await db.execute(sql.raw(`
+        const tgRows = await sql`
           SELECT
             COUNT(DISTINCT upload_id) AS doc_count,
             COUNT(*) AS chunk_count
           FROM document_chunks
-          WHERE user_id = '${telegramUserId}'
-        `));
-        const tgRows = Array.isArray(tgResult)
-          ? tgResult
-          : (tgResult.rows ?? []);
+          WHERE user_id = ${telegramUserId}::uuid
+        `;
         tgDocuments = parseInt(String(tgRows[0]?.doc_count ?? "0"), 10);
         tgChunks = parseInt(String(tgRows[0]?.chunk_count ?? "0"), 10);
 
-        const uploadsResult: any = await db.execute(sql.raw(`
+        const uploadsRows = await sql`
           SELECT COUNT(*) AS cnt
           FROM uploads
-          WHERE user_id = '${telegramUserId}'
+          WHERE user_id = ${telegramUserId}::uuid
             AND content_type IN ('document', 'text', 'voice')
             AND status = 'success'
-        `));
-        const uploadsRows = Array.isArray(uploadsResult)
-          ? uploadsResult
-          : (uploadsResult.rows ?? []);
+        `;
         totalUploads = parseInt(String(uploadsRows[0]?.cnt ?? "0"), 10);
       }
     } catch {
       // No telegram link
     }
+
+    await sql.end();
 
     return NextResponse.json({
       indexedDocuments: webDocuments + tgDocuments,
@@ -105,6 +95,7 @@ export async function GET() {
       webChunks,
     });
   } catch (error) {
+    await sql.end().catch(() => {});
     console.error("RAG stats error:", error);
     return NextResponse.json({
       indexedDocuments: 0,
