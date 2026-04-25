@@ -94,8 +94,7 @@ export const documentChunks = pgTable(
     uploadIdIdx: index("document_chunks_upload_id_idx").on(table.uploadId),
     userIdIdx: index("document_chunks_user_id_idx").on(table.userId),
     embeddingIdx: index("document_chunks_embedding_idx")
-      .using("ivfflat", table.embedding.op("vector_cosine_ops"))
-      .with({ lists: 100 }),
+      .using("hnsw", table.embedding.op("vector_cosine_ops")),
   })
 );
 

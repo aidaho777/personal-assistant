@@ -142,8 +142,14 @@ export async function POST(req: NextRequest) {
     `;
 
     await sql`
-      CREATE INDEX IF NOT EXISTS idx_web_doc_chunks_user 
+      CREATE INDEX IF NOT EXISTS idx_web_doc_chunks_user
       ON web_document_chunks(web_user_id)
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_web_doc_chunks_embedding
+      ON web_document_chunks
+      USING hnsw (embedding vector_cosine_ops)
     `;
 
     const formData = await req.formData();
