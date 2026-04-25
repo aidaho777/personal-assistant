@@ -28,6 +28,8 @@ export default function ChatClient() {
   const [uploadResult, setUploadResult] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
+  const [reindexing, setReindexing] = useState(false);
+  const [reindexResult, setReindexResult] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -136,6 +138,25 @@ export default function ChatClient() {
     }
   }
 
+  async function handleReindex() {
+    setReindexing(true);
+    setReindexResult(null);
+    try {
+      const res = await fetch("/api/rag/reindex", { method: "POST" });
+      const data = (await res.json()) as { reindexed?: number; total?: number; errors?: string[]; error?: string };
+      if (res.ok) {
+        setReindexResult(`✅ Переиндексировано: ${data.reindexed}/${data.total}${data.errors?.length ? ` (ошибки: ${data.errors.length})` : ""}`);
+        refreshStats();
+      } else {
+        setReindexResult(`❌ ${data.error ?? "Ошибка переиндексации"}`);
+      }
+    } catch {
+      setReindexResult("❌ Не удалось выполнить переиндексацию");
+    } finally {
+      setReindexing(false);
+    }
+  }
+
   async function handleFileUpload(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -218,6 +239,13 @@ export default function ChatClient() {
           >
             {indexing ? "Индексация..." : "🔄 Telegram"}
           </button>
+          <button
+            onClick={handleReindex}
+            disabled={reindexing}
+            className="text-xs px-3 py-1 rounded-lg bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white font-medium"
+          >
+            {reindexing ? "OCR..." : "🔍 Переиндексация"}
+          </button>
         </div>
       </div>
 
@@ -266,6 +294,12 @@ export default function ChatClient() {
       {indexResult && (
         <div className="text-sm px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">
           {indexResult}
+        </div>
+      )}
+
+      {reindexResult && (
+        <div className="text-sm px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">
+          {reindexResult}
         </div>
       )}
 

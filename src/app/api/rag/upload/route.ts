@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import postgres from "postgres";
 import { extractText, getDocumentProxy } from "unpdf";
 import { fetchWithRetry } from "@/lib/fetch-with-retry";
+import { extractTextFromPdfWithOCR, isTextGarbage } from "@/services/pdf-ocr";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -13,6 +14,10 @@ const CHUNK_OVERLAP = 15;
 const MAX_CHUNKS = 40; // limit total chunks to stay within 60s timeout
 
 function chunkText(text: string): string[] {
+  if (text.length < 1000) {
+    return text.trim().length > 10 ? [text.trim()] : [];
+  }
+
   const words = text.split(/\s+/).filter((w) => w.length > 0);
   const chunks: string[] = [];
   let start = 0;
@@ -75,12 +80,15 @@ async function extractTextFromFile(
     try {
       const pdf = await getDocumentProxy(new Uint8Array(buffer));
       const { text } = await extractText(pdf, { mergePages: true });
-      if (text && text.trim().length > 10) return text;
+      if (text && text.trim().length > 10 && !isTextGarbage(text)) {
+        console.log("[Upload] PDF text extraction OK, length:", text.length);
+        return text;
+      }
+      console.log("[Upload] PDF text is garbage or empty, using OCR");
     } catch (e) {
-      console.error("PDF parse error:", e);
+      console.error("[Upload] PDF parse error, using OCR:", e);
     }
-    // Fallback: raw text extraction
-    return buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t\u0400-\u04FF]/g, " ");
+    return await extractTextFromPdfWithOCR(buffer);
   }
 
   // DOCX / DOC
