@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { extractText as extractPdfText, getDocumentProxy } from "unpdf";
+import { extractTextFromPdfWithOCR, isTextGarbage } from "./pdf-ocr";
 import mammoth from "mammoth";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
@@ -26,6 +27,11 @@ function cleanText(text: string): string {
 
 function splitIntoChunks(text: string): string[] {
   const cleaned = cleanText(text);
+
+  if (cleaned.length < 1000) {
+    return cleaned.trim().length > 10 ? [cleaned.trim()] : [];
+  }
+
   const words = cleaned.split(/\s+/).filter(Boolean);
 
   if (words.length <= CHUNK_SIZE) {
@@ -53,9 +59,18 @@ async function extractText(buffer: Buffer, fileName: string, contentType: string
   let text: string | null = null;
 
   if (ext === "pdf") {
-    const pdf = await getDocumentProxy(new Uint8Array(buffer));
-    const result = await extractPdfText(pdf, { mergePages: true });
-    text = result.text || "";
+    try {
+      const pdf = await getDocumentProxy(new Uint8Array(buffer));
+      const result = await extractPdfText(pdf, { mergePages: true });
+      text = result.text || "";
+      if (isTextGarbage(text)) {
+        console.log("[Indexer] PDF text is garbage, using OCR for", fileName);
+        text = await extractTextFromPdfWithOCR(buffer);
+      }
+    } catch (e) {
+      console.error("[Indexer] PDF parse failed, using OCR:", e);
+      text = await extractTextFromPdfWithOCR(buffer);
+    }
   } else if (ext === "docx") {
     const result = await mammoth.extractRawText({ buffer });
     text = result.value;
