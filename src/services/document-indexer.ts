@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { PDFParse } from "pdf-parse";
+import { extractText as extractPdfText, getDocumentProxy } from "unpdf";
 import mammoth from "mammoth";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
@@ -34,9 +34,9 @@ async function extractText(buffer: Buffer, fileName: string, contentType: string
   if (contentType === "photo" || ["jpg", "jpeg", "png", "gif", "webp"].includes(ext)) return null;
 
   if (ext === "pdf") {
-    const parser = new PDFParse(buffer);
-    const result = await parser.getText();
-    return String(result);
+    const pdf = await getDocumentProxy(new Uint8Array(buffer));
+    const { text } = await extractPdfText(pdf, { mergePages: true });
+    return text || "";
   }
 
   if (ext === "docx") {
