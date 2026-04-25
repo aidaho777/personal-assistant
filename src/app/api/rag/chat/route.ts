@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { db } from "@/db";
-import { sql } from "drizzle-orm";
+import postgres from "postgres";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -104,15 +103,24 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) {
+    return NextResponse.json({ error: "DATABASE_URL is not set" }, { status: 500 });
+  }
+
+  const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
+
   try {
     const embedding = await getEmbedding(message);
-    const embeddingStr = `[${embedding.join(",")}]`;
+    // Format as PostgreSQL vector literal: '{0.1,0.2,...}'
+    const embeddingLiteral = `{${embedding.join(",")}}`;
 
     const allChunks: { content: string; fileName?: string }[] = [];
 
     // 1. Search web_document_chunks (uploaded via web UI)
     try {
-      await db.execute(sql.raw(`
+      await sql`CREATE EXTENSION IF NOT EXISTS vector`;
+      await sql`
         CREATE TABLE IF NOT EXISTS web_document_chunks (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           web_user_id UUID NOT NULL,
@@ -123,78 +131,66 @@ export async function POST(req: NextRequest) {
           chunk_index INTEGER NOT NULL DEFAULT 0,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
-      `));
+      `;
 
-      const webResult: any = await db.execute(sql.raw(`
+      const webRows = await sql`
         SELECT content, file_name,
-               1 - (embedding <=> '${embeddingStr}'::vector) AS similarity
+               1 - (embedding <=> ${embeddingLiteral}::vector) AS similarity
         FROM web_document_chunks
-        WHERE web_user_id = '${webUserId}'
+        WHERE web_user_id = ${webUserId}::uuid
           AND embedding IS NOT NULL
-        ORDER BY embedding <=> '${embeddingStr}'::vector
+        ORDER BY embedding <=> ${embeddingLiteral}::vector
         LIMIT 5
-      `));
+      `;
 
-      const webRows = Array.isArray(webResult)
-        ? webResult
-        : (webResult.rows ?? []);
       for (const row of webRows) {
         if ((row.similarity ?? 0) > 0.2) {
-          allChunks.push({ content: row.content, fileName: row.file_name });
+          allChunks.push({ content: row.content as string, fileName: row.file_name as string });
         }
       }
-    } catch {
-      // web_document_chunks may not exist yet
+    } catch (e) {
+      console.error("web_document_chunks search error:", e);
     }
 
     // 2. Search document_chunks from Telegram uploads (if linked)
     try {
-      const webUserResult: any = await db.execute(
-        sql.raw(
-          `SELECT telegram_user_id FROM web_users WHERE id = '${webUserId}'`
-        )
-      );
-      const webUserRows = Array.isArray(webUserResult)
-        ? webUserResult
-        : (webUserResult.rows ?? []);
-      const telegramUserId = webUserRows[0]?.telegram_user_id as
-        | string
-        | undefined;
+      const webUserRows = await sql`
+        SELECT telegram_user_id FROM web_users WHERE id = ${webUserId}::uuid
+      `;
+      const telegramUserId = webUserRows[0]?.telegram_user_id as string | undefined;
 
       if (telegramUserId) {
-        const tgResult: any = await db.execute(sql.raw(`
+        const tgRows = await sql`
           SELECT dc.content, u.original_name AS file_name,
-                 1 - (dc.embedding <=> '${embeddingStr}'::vector) AS similarity
+                 1 - (dc.embedding <=> ${embeddingLiteral}::vector) AS similarity
           FROM document_chunks dc
           LEFT JOIN uploads u ON u.id = dc.upload_id
-          WHERE dc.user_id = '${telegramUserId}'
+          WHERE dc.user_id = ${telegramUserId}::bigint
             AND dc.embedding IS NOT NULL
-          ORDER BY dc.embedding <=> '${embeddingStr}'::vector
+          ORDER BY dc.embedding <=> ${embeddingLiteral}::vector
           LIMIT 5
-        `));
+        `;
 
-        const tgRows = Array.isArray(tgResult)
-          ? tgResult
-          : (tgResult.rows ?? []);
         for (const row of tgRows) {
           if ((row.similarity ?? 0) > 0.2) {
             allChunks.push({
-              content: row.content,
-              fileName: row.file_name ?? "Telegram",
+              content: row.content as string,
+              fileName: (row.file_name as string) ?? "Telegram",
             });
           }
         }
       }
-    } catch {
-      // No telegram link or document_chunks issue
+    } catch (e) {
+      console.error("Telegram document_chunks search error:", e);
     }
 
-    // Sort by relevance (already ordered, just take top 5)
-    const topChunks = allChunks.slice(0, 5);
+    await sql.end();
 
+    const topChunks = allChunks.slice(0, 5);
     const answer = await generateAnswer(message, topChunks);
     return NextResponse.json({ answer, sources: topChunks.length });
   } catch (error) {
+    await sql.end().catch(() => {});
     console.error("RAG chat error:", error);
     const msg = error instanceof Error ? error.message : String(error);
 
