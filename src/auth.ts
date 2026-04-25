@@ -62,16 +62,21 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
           .limit(1);
 
         if (!existing) {
-          await db.insert(webUsers).values({
-            email: user.email,
-            name: user.name ?? undefined,
-            avatarUrl: user.image ?? undefined,
-          });
+          const [created] = await db
+            .insert(webUsers)
+            .values({
+              email: user.email,
+              name: user.name ?? undefined,
+              avatarUrl: user.image ?? undefined,
+            })
+            .returning({ id: webUsers.id });
+          user.id = created.id;
         } else {
           await db
             .update(webUsers)
             .set({ lastLoginAt: new Date() })
             .where(eq(webUsers.id, existing.id));
+          user.id = existing.id;
         }
       }
       return true;

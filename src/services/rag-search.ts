@@ -1,5 +1,4 @@
-import { db } from "@/db";
-import { sql } from "drizzle-orm";
+import postgres from "postgres";
 import { fetchWithRetry } from "@/lib/fetch-with-retry";
 
 async function getEmbedding(text: string): Promise<number[]> {
@@ -38,17 +37,25 @@ export async function searchDocuments(
   const queryEmbedding = await getEmbedding(query);
   const embeddingStr = `[${queryEmbedding.join(",")}]`;
 
-  const results: any = await db.execute(sql.raw(`
-    SELECT
-      content,
-      metadata,
-      1 - (embedding <=> '${embeddingStr}'::vector) as similarity
-    FROM document_chunks
-    WHERE user_id = '${userId}'
-    ORDER BY embedding <=> '${embeddingStr}'::vector
-    LIMIT ${limit}
-  `));
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) return [];
 
-  const rows = Array.isArray(results) ? results : (results.rows ?? []);
-  return rows as SearchResult[];
+  const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
+
+  try {
+    const rows = await sql`
+      SELECT
+        content,
+        metadata,
+        1 - (embedding <=> ${embeddingStr}::vector) as similarity
+      FROM document_chunks
+      WHERE user_id = ${userId}::uuid
+        AND embedding IS NOT NULL
+      ORDER BY embedding <=> ${embeddingStr}::vector
+      LIMIT ${limit}
+    `;
+    return rows as SearchResult[];
+  } finally {
+    await sql.end().catch(() => {});
+  }
 }
