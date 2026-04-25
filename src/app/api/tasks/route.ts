@@ -65,11 +65,12 @@ export async function GET(req: NextRequest) {
       `;
     }
 
+    console.log("[Tasks] GET:", userId, "filter:", filter, "count:", rows.length);
     await sql.end();
     return NextResponse.json({ tasks: rows });
   } catch (error) {
     await sql.end().catch(() => {});
-    console.error("Tasks GET error:", error);
+    console.error("[Tasks] GET error:", error);
     return NextResponse.json({ error: "Failed to fetch tasks" }, { status: 500 });
   }
 }
@@ -98,7 +99,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Title is required" }, { status: 400 });
     }
 
-    const dueDate = body.dueDate ? new Date(body.dueDate).toISOString() : new Date().toISOString();
+    const dueDate = body.dueDate && body.dueDate.trim()
+      ? new Date(body.dueDate).toISOString()
+      : null;
 
     const rows = await sql`
       INSERT INTO tasks (user_id, title, description, status, category, due_date)
@@ -112,6 +115,8 @@ export async function POST(req: NextRequest) {
       )
       RETURNING *
     `;
+
+    console.log("[Tasks] Created:", rows[0]?.id, body.title.trim());
 
     await sql.end();
     return NextResponse.json({ task: rows[0] });

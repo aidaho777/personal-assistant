@@ -125,8 +125,13 @@ export default function TasksClient() {
         setShowCreate(false);
         setCreateForm({ title: "", description: "", dueDate: toLocalDate(new Date()), category: "task" });
         fetchTasks();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        console.error("[Tasks] Create failed:", res.status, err);
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      console.error("[Tasks] Network error:", e);
+    }
   }
 
   async function updateTask(id: string, updates: Record<string, unknown>) {
