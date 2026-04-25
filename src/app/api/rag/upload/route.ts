@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import postgres from "postgres";
+
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
@@ -98,7 +99,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const webUserId = session.user.id;
+  const webUserId = session.user.id; // UUID string
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
@@ -115,23 +116,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "DATABASE_URL is not set" }, { status: 500 });
   }
 
-  // Use postgres.js directly for parameterized queries (supports vector type correctly)
+  // Use postgres.js directly for reliable parameterized queries
   const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
 
   try {
-    // Ensure pgvector extension and table exist
-    await sql`CREATE EXTENSION IF NOT EXISTS vector`;
+    // Create table if not exists — store embedding as TEXT (JSON array string)
+    // This avoids PostgreSQL protocol issues with vector type casting
     await sql`
       CREATE TABLE IF NOT EXISTS web_document_chunks (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         web_user_id UUID NOT NULL,
         file_name TEXT NOT NULL,
         content TEXT NOT NULL,
-        embedding vector(1536),
-        metadata JSONB,
+        embedding TEXT,
         chunk_index INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
+    `;
+
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_web_doc_chunks_user 
+      ON web_document_chunks(web_user_id)
     `;
 
     const formData = await req.formData();
@@ -199,34 +204,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No content to index" }, { status: 400 });
     }
 
-    // Index each chunk with embedding
+    // Index each chunk with embedding stored as TEXT (JSON string)
     let indexed = 0;
     const errors: string[] = [];
-    const BATCH_SIZE = 20;
+    const BATCH_SIZE = 10;
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       try {
         const embedding = await getEmbedding(chunk);
-        // Format as PostgreSQL vector literal: '{0.1,0.2,...}'
-        const embeddingLiteral = `{${embedding.join(",")}}`;
-        const metadata = JSON.stringify({
-          fileName,
-          mimeType,
-          position: i,
-          totalChunks: chunks.length,
-        });
+        // Store as JSON string — TEXT column, no vector protocol issues
+        const embeddingText = JSON.stringify(embedding);
 
-        // Use postgres.js parameterized template — safe for large vectors
         await sql`
-          INSERT INTO web_document_chunks (id, web_user_id, file_name, content, embedding, metadata, chunk_index)
+          INSERT INTO web_document_chunks (id, web_user_id, file_name, content, embedding, chunk_index)
           VALUES (
             gen_random_uuid(),
             ${webUserId}::uuid,
             ${fileName},
             ${chunk},
-            ${embeddingLiteral}::vector,
-            ${metadata}::jsonb,
+            ${embeddingText},
             ${i}
           )
         `;
@@ -239,7 +236,7 @@ export async function POST(req: NextRequest) {
 
       // Rate limit protection: pause after each batch
       if ((i + 1) % BATCH_SIZE === 0 && i + 1 < chunks.length) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
 
