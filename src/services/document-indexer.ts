@@ -13,18 +13,35 @@ function getOpenAI() {
   return new OpenAI({ apiKey: key, maxRetries: 3 });
 }
 
-function splitIntoChunks(text: string, maxTokens = 500, overlapTokens = 100): string[] {
-  const words = text.split(/\s+/).filter(Boolean);
-  const chunks: string[] = [];
-  const step = maxTokens - overlapTokens;
+const CHUNK_SIZE = 300;
+const CHUNK_OVERLAP = 50;
 
-  for (let i = 0; i < words.length; i += step) {
-    const chunk = words.slice(i, i + maxTokens).join(" ");
-    if (chunk.trim()) chunks.push(chunk.trim());
-    if (i + maxTokens >= words.length) break;
+function cleanText(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function splitIntoChunks(text: string): string[] {
+  const cleaned = cleanText(text);
+  const words = cleaned.split(/\s+/).filter(Boolean);
+
+  if (words.length <= CHUNK_SIZE) {
+    return cleaned.trim() ? [cleaned.trim()] : [];
   }
 
-  return chunks.length > 0 ? chunks : [text.trim()].filter(Boolean);
+  const chunks: string[] = [];
+  const step = CHUNK_SIZE - CHUNK_OVERLAP;
+
+  for (let i = 0; i < words.length; i += step) {
+    const chunk = words.slice(i, i + CHUNK_SIZE).join(" ");
+    if (chunk.trim()) chunks.push(chunk.trim());
+    if (i + CHUNK_SIZE >= words.length) break;
+  }
+
+  return chunks.length > 0 ? chunks : [cleaned.trim()].filter(Boolean);
 }
 
 async function extractText(buffer: Buffer, fileName: string, contentType: string): Promise<string | null> {
@@ -33,22 +50,36 @@ async function extractText(buffer: Buffer, fileName: string, contentType: string
   if (contentType === "voice" || ext === "ogg" || ext === "oga") return null;
   if (contentType === "photo" || ["jpg", "jpeg", "png", "gif", "webp"].includes(ext)) return null;
 
+  let text: string | null = null;
+
   if (ext === "pdf") {
     const pdf = await getDocumentProxy(new Uint8Array(buffer));
-    const { text } = await extractPdfText(pdf, { mergePages: true });
-    return text || "";
-  }
-
-  if (ext === "docx") {
+    const result = await extractPdfText(pdf, { mergePages: true });
+    text = result.text || "";
+  } else if (ext === "docx") {
     const result = await mammoth.extractRawText({ buffer });
-    return result.value;
+    text = result.value;
+  } else if (["txt", "csv", "md", "json", "xml", "html", "log"].includes(ext)) {
+    text = buffer.toString("utf-8");
+  } else {
+    text = buffer.toString("utf-8");
   }
 
-  if (["txt", "csv", "md", "json", "xml", "html", "log"].includes(ext)) {
-    return buffer.toString("utf-8");
+  if (text) {
+    text = cleanText(text);
+    console.log("[Indexer] Extracted text preview:", text.substring(0, 500));
+
+    if (text.length < 20) {
+      console.warn("[Indexer] WARNING: Extracted text too short:", text.length, "chars from", fileName);
+    }
+
+    const printableRatio = text.replace(/[^\x20-\x7E\n\r\tА-яЁё]/g, "").length / text.length;
+    if (printableRatio < 0.7) {
+      console.warn("[Indexer] WARNING: Low printable ratio:", (printableRatio * 100).toFixed(0) + "% for", fileName, "— may need OCR");
+    }
   }
 
-  return buffer.toString("utf-8");
+  return text;
 }
 
 async function getEmbeddings(texts: string[]): Promise<number[][]> {
@@ -75,9 +106,14 @@ export async function indexDocument(uploadId: string): Promise<{ chunksCreated: 
   const buffer = await downloadFileFromDrive(upload.driveFileId);
   const text = await extractText(buffer, upload.fileName, upload.contentType);
 
-  if (!text || text.trim().length < 10) return { chunksCreated: 0 };
+  if (!text || text.trim().length < 10) {
+    console.warn("[Indexer] No usable text from", upload.fileName);
+    return { chunksCreated: 0 };
+  }
 
   const chunks = splitIntoChunks(text);
+  console.log("[Indexer] File:", upload.fileName, "→", chunks.length, "chunks");
+
   const BATCH_SIZE = 20;
   let totalCreated = 0;
 
@@ -91,9 +127,10 @@ export async function indexDocument(uploadId: string): Promise<{ chunksCreated: 
       content,
       embedding: embeddings[j],
       metadata: {
-        fileName: upload.fileName,
+        fileName: upload.originalName ?? upload.fileName,
         tag: upload.tag,
         driveUrl: upload.driveUrl ?? undefined,
+        chunkIndex: i + j,
       },
       chunkIndex: i + j,
     }));
@@ -114,14 +151,10 @@ export async function indexAllDocuments(userId?: string): Promise<{ indexed: num
     .from(uploads)
     .where(conditions.length === 1 ? conditions[0] : undefined);
 
-  const filteredUploads = userId
-    ? allUploads
-    : allUploads;
-
   let indexed = 0;
   const errors: string[] = [];
 
-  for (const u of filteredUploads) {
+  for (const u of allUploads) {
     try {
       const result = await indexDocument(u.id);
       if (result.chunksCreated > 0) indexed++;

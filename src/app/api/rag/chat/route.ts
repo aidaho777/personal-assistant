@@ -23,7 +23,8 @@ async function getEmbedding(text: string): Promise<number[]> {
 
 async function generateAnswer(
   question: string,
-  chunks: { content: string; fileName?: string }[]
+  chunks: { content: string; fileName?: string }[],
+  hasDocuments: boolean
 ): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
@@ -33,10 +34,16 @@ async function generateAnswer(
       return `[${i + 1}]${source}\n${c.content}`;
     })
     .join("\n\n---\n\n");
-  const systemPrompt =
-    chunks.length > 0
-      ? `Ты — умный ассистент. Отвечай на вопросы пользователя, опираясь на предоставленные фрагменты документов. Если ответа нет в документах — скажи об этом честно. Отвечай на русском языке.`
-      : `Ты — умный ассистент. Документы пользователя ещё не загружены или не найдены релевантные фрагменты. Сообщи пользователю, что нужно загрузить документы через кнопку "📎 Загрузить документ" на странице AI Chat. Отвечай на русском языке.`;
+
+  let systemPrompt: string;
+  if (chunks.length > 0) {
+    systemPrompt = `Ты — умный ассистент. Отвечай на вопросы пользователя, опираясь на предоставленные фрагменты документов. Если ответа нет в документах — скажи об этом честно. Отвечай на русском языке.`;
+  } else if (hasDocuments) {
+    systemPrompt = `Ты — умный ассистент. Документы пользователя загружены, но по данному запросу не найдены релевантные фрагменты. Предложи пользователю переформулировать вопрос или использовать другие ключевые слова. Отвечай на русском языке.`;
+  } else {
+    systemPrompt = `Ты — умный ассистент. Документы пользователя ещё не загружены. Сообщи пользователю, что нужно загрузить документы через кнопку "📎 Загрузить документ" на странице AI Chat. Отвечай на русском языке.`;
+  }
+
   const userContent =
     chunks.length > 0
       ? `Контекст из документов:\n\n${context}\n\n---\n\nВопрос: ${question}`
@@ -70,7 +77,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const webUserId = session.user.id; // UUID string
+    const webUserId = session.user.id;
     const { message } = (await req.json()) as { message?: string };
     if (!message?.trim()) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 });
@@ -95,43 +102,85 @@ export async function POST(req: NextRequest) {
     const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
 
     try {
-      // Check if web_document_chunks table exists
       const tableCheck = await sql`
         SELECT EXISTS (
-          SELECT FROM information_schema.tables 
+          SELECT FROM information_schema.tables
           WHERE table_name = 'web_document_chunks'
         ) as exists
       `;
       const tableExists = tableCheck[0]?.exists;
 
       let topChunks: { content: string; fileName?: string }[] = [];
+      let hasDocuments = false;
+      let searchMethod = "none";
 
       if (tableExists) {
-        try {
-          const queryEmbedding = await getEmbedding(message);
-          const embeddingString = `[${queryEmbedding.join(',')}]`;
+        const countRows = await sql`
+          SELECT COUNT(*) as cnt FROM web_document_chunks
+          WHERE web_user_id = ${webUserId}::uuid
+        `;
+        const chunkCount = parseInt(String(countRows[0]?.cnt ?? "0"), 10);
+        hasDocuments = chunkCount > 0;
+        console.log("[RAG Chat] web_user_id:", webUserId, "web chunks:", chunkCount);
 
-          const rows = await sql`
-            SELECT content, file_name
-            FROM web_document_chunks
-            WHERE web_user_id = ${webUserId}::uuid
-              AND embedding IS NOT NULL
-            ORDER BY embedding <=> ${embeddingString}::vector
-            LIMIT 5
-          `;
+        if (chunkCount > 0) {
+          // Vector search
+          try {
+            const queryEmbedding = await getEmbedding(message);
+            const embeddingString = `[${queryEmbedding.join(",")}]`;
 
-          topChunks = rows.map((row) => ({
-            content: row.content as string,
-            fileName: row.file_name as string,
-          }));
-        } catch (e) {
-          console.error("pgvector search error:", e);
+            const rows = await sql`
+              SELECT content, file_name
+              FROM web_document_chunks
+              WHERE web_user_id = ${webUserId}::uuid
+                AND embedding IS NOT NULL
+              ORDER BY embedding <=> ${embeddingString}::vector
+              LIMIT 5
+            `;
+
+            topChunks = rows.map((row) => ({
+              content: row.content as string,
+              fileName: row.file_name as string,
+            }));
+            searchMethod = "vector";
+            console.log("[RAG Chat] Vector results:", topChunks.length);
+          } catch (e) {
+            console.error("[RAG Chat] Vector search error:", e);
+          }
+
+          // Keyword fallback if vector returned nothing
+          if (topChunks.length === 0) {
+            try {
+              const keywords = message.split(/\s+/).filter((w) => w.length > 2);
+              if (keywords.length > 0) {
+                const patterns = keywords.map((k) => `%${k}%`);
+                const conditions = patterns.map((p) => sql`content ILIKE ${p}`);
+                const whereClause = conditions.reduce((acc, cond) => sql`${acc} OR ${cond}`);
+
+                const rows = await sql`
+                  SELECT content, file_name
+                  FROM web_document_chunks
+                  WHERE web_user_id = ${webUserId}::uuid
+                    AND (${whereClause})
+                  LIMIT 5
+                `;
+
+                topChunks = rows.map((row) => ({
+                  content: row.content as string,
+                  fileName: row.file_name as string,
+                }));
+                searchMethod = "keyword";
+                console.log("[RAG Chat] Keyword results:", topChunks.length);
+              }
+            } catch (e) {
+              console.error("[RAG Chat] Keyword search error:", e);
+            }
+          }
         }
       }
 
-      // If no web chunks found, try to answer without context
-      if (topChunks.length === 0) {
-        // Also try Telegram document_chunks if user has linked telegram account
+      // Fallback to Telegram document_chunks
+      if (topChunks.length === 0 && !hasDocuments) {
         try {
           const webUserRows = await sql`
             SELECT telegram_user_id FROM web_users WHERE id = ${webUserId}::uuid
@@ -139,17 +188,17 @@ export async function POST(req: NextRequest) {
           const telegramUserId = webUserRows[0]?.telegram_user_id as string | undefined;
 
           if (telegramUserId) {
-            // Get query embedding for telegram search
+            hasDocuments = true;
             const queryEmbedding = await getEmbedding(message);
-            const embeddingLiteral = `{${queryEmbedding.join(",")}}`;
+            const embeddingString = `[${queryEmbedding.join(",")}]`;
 
             const tgRows = await sql`
               SELECT dc.content, u.original_name AS file_name
               FROM document_chunks dc
               LEFT JOIN uploads u ON u.id = dc.upload_id
-              WHERE dc.user_id = ${telegramUserId}::bigint
+              WHERE dc.user_id = ${telegramUserId}::uuid
                 AND dc.embedding IS NOT NULL
-              ORDER BY dc.embedding <=> ${embeddingLiteral}::vector
+              ORDER BY dc.embedding <=> ${embeddingString}::vector
               LIMIT 5
             `;
 
@@ -157,17 +206,25 @@ export async function POST(req: NextRequest) {
               content: row.content as string,
               fileName: (row.file_name as string) ?? "Telegram",
             }));
+            searchMethod = "telegram_vector";
+            console.log("[RAG Chat] Telegram results:", topChunks.length);
           }
         } catch (e) {
-          // pgvector might not be available or telegram not linked — ignore
-          console.error("Telegram chunks search error:", e);
+          console.error("[RAG Chat] Telegram search error:", e);
         }
       }
 
       await sql.end();
 
-      const answer = await generateAnswer(message, topChunks);
-      return NextResponse.json({ answer, sources: topChunks.length });
+      console.log("[RAG Chat] Final: method=%s, chunks=%d, hasDocuments=%s", searchMethod, topChunks.length, hasDocuments);
+
+      const answer = await generateAnswer(message, topChunks, hasDocuments);
+      return NextResponse.json({
+        answer,
+        sources: topChunks.length,
+        searchMethod,
+        hasDocuments,
+      });
     } catch (innerError) {
       await sql.end().catch(() => {});
       throw innerError;
