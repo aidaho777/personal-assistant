@@ -145,6 +145,8 @@ export async function POST(req: NextRequest) {
   const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
 
   try {
+    await sql`CREATE EXTENSION IF NOT EXISTS vector`;
+
     // Create table if not exists
     await sql`
       CREATE TABLE IF NOT EXISTS web_document_chunks (
@@ -152,7 +154,7 @@ export async function POST(req: NextRequest) {
         web_user_id UUID NOT NULL,
         file_name TEXT NOT NULL,
         content TEXT NOT NULL,
-        embedding TEXT,
+        embedding vector(1536),
         chunk_index INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
@@ -234,7 +236,7 @@ export async function POST(req: NextRequest) {
     let indexed = 0;
     for (let i = 0; i < chunks.length; i++) {
       try {
-        const embeddingText = JSON.stringify(embeddings[i]);
+        const embeddingString = `[${embeddings[i].join(',')}]`;
         await sql`
           INSERT INTO web_document_chunks (id, web_user_id, file_name, content, embedding, chunk_index)
           VALUES (
@@ -242,7 +244,7 @@ export async function POST(req: NextRequest) {
             ${webUserId}::uuid,
             ${fileName},
             ${chunks[i]},
-            ${embeddingText},
+            ${embeddingString}::vector,
             ${i}
           )
         `;

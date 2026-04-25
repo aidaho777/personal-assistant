@@ -24,19 +24,6 @@ async function getEmbedding(text: string): Promise<number[]> {
   return data.data[0].embedding;
 }
 
-// Cosine similarity between two vectors (computed in JS)
-function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length) return 0;
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
 async function generateAnswer(
   question: string,
   chunks: { content: string; fileName?: string }[]
@@ -127,42 +114,25 @@ export async function POST(req: NextRequest) {
       let topChunks: { content: string; fileName?: string }[] = [];
 
       if (tableExists) {
-        // Fetch all chunks for this user (embedding stored as TEXT/JSON)
-        const rows = await sql`
-          SELECT content, file_name, embedding
-          FROM web_document_chunks
-          WHERE web_user_id = ${webUserId}::uuid
-          ORDER BY created_at DESC
-          LIMIT 500
-        `;
-
-        if (rows.length > 0) {
-          // Get query embedding
+        try {
           const queryEmbedding = await getEmbedding(message);
+          const embeddingString = `[${queryEmbedding.join(',')}]`;
 
-          // Compute cosine similarity in JavaScript
-          const scored = rows
-            .map((row) => {
-              let similarity = 0;
-              if (row.embedding) {
-                try {
-                  const emb = JSON.parse(row.embedding as string) as number[];
-                  similarity = cosineSimilarity(queryEmbedding, emb);
-                } catch {
-                  similarity = 0;
-                }
-              }
-              return {
-                content: row.content as string,
-                fileName: row.file_name as string,
-                similarity,
-              };
-            })
-            .filter((r) => r.similarity > 0.3)
-            .sort((a, b) => b.similarity - a.similarity)
-            .slice(0, 5);
+          const rows = await sql`
+            SELECT content, file_name
+            FROM web_document_chunks
+            WHERE web_user_id = ${webUserId}::uuid
+              AND embedding IS NOT NULL
+            ORDER BY embedding <=> ${embeddingString}::vector
+            LIMIT 5
+          `;
 
-          topChunks = scored;
+          topChunks = rows.map((row) => ({
+            content: row.content as string,
+            fileName: row.file_name as string,
+          }));
+        } catch (e) {
+          console.error("pgvector search error:", e);
         }
       }
 
