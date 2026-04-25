@@ -5,15 +5,16 @@ import postgres from "postgres";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Max ~1500 tokens per chunk (safe for text-embedding-3-small which supports 8192)
-const CHUNK_SIZE = 200; // words per chunk
-const CHUNK_OVERLAP = 20; // words overlap between chunks
+// Smaller chunks = fewer tokens per chunk = faster processing
+const CHUNK_SIZE = 150; // words per chunk (~600 tokens)
+const CHUNK_OVERLAP = 15;
+const MAX_CHUNKS = 40; // limit total chunks to stay within 60s timeout
 
 function chunkText(text: string): string[] {
   const words = text.split(/\s+/).filter((w) => w.length > 0);
   const chunks: string[] = [];
   let start = 0;
-  while (start < words.length) {
+  while (start < words.length && chunks.length < MAX_CHUNKS) {
     const end = Math.min(start + CHUNK_SIZE, words.length);
     const chunk = words.slice(start, end).join(" ");
     if (chunk.trim().length > 10) {
@@ -24,25 +25,35 @@ function chunkText(text: string): string[] {
   return chunks;
 }
 
-async function getEmbedding(text: string): Promise<number[]> {
+// Batch embeddings — one API call for all chunks
+async function getBatchEmbeddings(texts: string[]): Promise<number[][]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
-  // Truncate text to avoid token limit (max ~6000 chars for safety)
-  const safeText = text.slice(0, 6000);
+
+  // Truncate each text to avoid token limit
+  const safeTexts = texts.map((t) => t.slice(0, 4000));
+
   const res = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({ model: "text-embedding-3-small", input: safeText }),
+    body: JSON.stringify({
+      model: "text-embedding-3-small",
+      input: safeTexts,
+    }),
   });
+
   if (!res.ok) {
     const err = await res.text();
     throw new Error(`OpenAI embeddings error: ${err}`);
   }
-  const data = (await res.json()) as { data: { embedding: number[] }[] };
-  return data.data[0].embedding;
+
+  const data = (await res.json()) as { data: { index: number; embedding: number[] }[] };
+  // Sort by index to ensure correct order
+  const sorted = data.data.sort((a, b) => a.index - b.index);
+  return sorted.map((d) => d.embedding);
 }
 
 async function extractTextFromFile(
@@ -72,7 +83,9 @@ async function extractTextFromFile(
       const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
       const pdfDoc = await loadingTask.promise;
       const textParts: string[] = [];
-      for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+      // Limit to first 30 pages to avoid timeout
+      const maxPages = Math.min(pdfDoc.numPages, 30);
+      for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
         const page = await pdfDoc.getPage(pageNum);
         const content = await page.getTextContent();
         const pageText = content.items
@@ -85,7 +98,7 @@ async function extractTextFromFile(
     } catch (e) {
       console.error("PDF parse error:", e);
     }
-    // Fallback: try to extract raw text
+    // Fallback: raw text extraction
     return buffer.toString("utf-8").replace(/[^\x20-\x7E\n\r\t\u0400-\u04FF]/g, " ");
   }
 
@@ -129,12 +142,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "DATABASE_URL is not set" }, { status: 500 });
   }
 
-  // Use postgres.js directly for reliable parameterized queries
   const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
 
   try {
-    // Create table if not exists — store embedding as TEXT (JSON array string)
-    // This avoids PostgreSQL protocol issues with vector type casting
+    // Create table if not exists
     await sql`
       CREATE TABLE IF NOT EXISTS web_document_chunks (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -169,7 +180,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Supported formats
     const supportedExtensions = [
       ".txt", ".md", ".csv", ".json",
       ".pdf",
@@ -191,7 +201,7 @@ export async function POST(req: NextRequest) {
     const fileName = file.name;
     const mimeType = file.type;
 
-    // Extract text from file
+    // Extract text
     const text = await extractTextFromFile(buffer, mimeType, fileName);
 
     if (!text || text.trim().length < 10) {
@@ -202,7 +212,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Delete old chunks for this file from this user
+    // Delete old chunks for this file
     await sql`
       DELETE FROM web_document_chunks
       WHERE web_user_id = ${webUserId}::uuid
@@ -217,39 +227,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No content to index" }, { status: 400 });
     }
 
-    // Index each chunk with embedding stored as TEXT (JSON string)
+    // Get ALL embeddings in ONE API call (batch)
+    const embeddings = await getBatchEmbeddings(chunks);
+
+    // Insert all chunks into DB
     let indexed = 0;
-    const errors: string[] = [];
-    const BATCH_SIZE = 10;
-
     for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
       try {
-        const embedding = await getEmbedding(chunk);
-        // Store as JSON string — TEXT column, no vector protocol issues
-        const embeddingText = JSON.stringify(embedding);
-
+        const embeddingText = JSON.stringify(embeddings[i]);
         await sql`
           INSERT INTO web_document_chunks (id, web_user_id, file_name, content, embedding, chunk_index)
           VALUES (
             gen_random_uuid(),
             ${webUserId}::uuid,
             ${fileName},
-            ${chunk},
+            ${chunks[i]},
             ${embeddingText},
             ${i}
           )
         `;
         indexed++;
       } catch (chunkErr) {
-        const msg = chunkErr instanceof Error ? chunkErr.message : String(chunkErr);
-        errors.push(`Chunk ${i}: ${msg}`);
-        console.error(`Error indexing chunk ${i}:`, chunkErr);
-      }
-
-      // Rate limit protection: pause after each batch
-      if ((i + 1) % BATCH_SIZE === 0 && i + 1 < chunks.length) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        console.error(`Error inserting chunk ${i}:`, chunkErr);
       }
     }
 
@@ -261,7 +260,6 @@ export async function POST(req: NextRequest) {
       chunks: indexed,
       totalChunks: chunks.length,
       characters: text.length,
-      errors: errors.length > 0 ? errors.slice(0, 5) : undefined,
     });
   } catch (error) {
     await sql.end().catch(() => {});
