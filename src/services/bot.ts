@@ -25,7 +25,17 @@ import {
 import { recognizeSpeech } from "./yandex-speechkit";
 import { extractTask } from "./task-extractor";
 import { db, schema } from "../db";
+import { eq } from "drizzle-orm";
 import type { User } from "../db/schema";
+
+async function getTaskUserId(telegramUserId: string): Promise<string> {
+  const rows = await db
+    .select({ id: schema.webUsers.id })
+    .from(schema.webUsers)
+    .where(eq(schema.webUsers.telegramUserId, telegramUserId))
+    .limit(1);
+  return rows[0]?.id ?? telegramUserId;
+}
 
 // ─── Bot singleton ──────────────────────────────────────────────────────
 
@@ -268,8 +278,9 @@ function registerHandlers(bot: Telegraf) {
       try {
         const taskResult = await extractTask(text);
         if (taskResult.isTask && taskResult.title) {
+          const taskUserId = await getTaskUserId(user.id);
           await db.insert(schema.tasks).values({
-            userId: user.id,
+            userId: taskUserId,
             title: taskResult.title,
             description: taskResult.description ?? null,
             dueDate: taskResult.dueDate ? new Date(taskResult.dueDate) : new Date(),
@@ -368,8 +379,9 @@ async function processFile(ctx: Context, user: User, input: FileInput) {
           const taskResult = await extractTask(transcriptionText);
           if (taskResult.isTask && taskResult.title) {
             const user = (ctx as unknown as AuthContext).dbUser;
+            const taskUserId = await getTaskUserId(user.id);
             await db.insert(schema.tasks).values({
-              userId: user.id,
+              userId: taskUserId,
               title: taskResult.title,
               description: taskResult.description ?? null,
               dueDate: taskResult.dueDate ? new Date(taskResult.dueDate) : new Date(),

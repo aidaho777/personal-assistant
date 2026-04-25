@@ -113,9 +113,7 @@ export const tasks = pgTable(
   "tasks",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id),
+    userId: uuid("user_id").notNull(),
     title: text("title").notNull(),
     description: text("description"),
     status: varchar("status", { length: 16 }).notNull().default("todo"),
