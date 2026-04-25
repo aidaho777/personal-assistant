@@ -4,11 +4,26 @@ import postgres from "postgres";
 
 export const dynamic = "force-dynamic";
 
-async function getUserId(sql: ReturnType<typeof postgres>, webUserId: string): Promise<string | null> {
-  const rows = await sql`
-    SELECT telegram_user_id FROM web_users WHERE id = ${webUserId}::uuid
+function getDb() {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL is not set");
+  return postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
+}
+
+async function ensureTable(sql: ReturnType<typeof postgres>) {
+  await sql`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      status VARCHAR(16) NOT NULL DEFAULT 'todo',
+      category VARCHAR(16) NOT NULL DEFAULT 'task',
+      due_date TIMESTAMPTZ DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
   `;
-  return (rows[0]?.telegram_user_id as string) ?? null;
 }
 
 export async function GET(req: NextRequest) {
@@ -17,31 +32,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) return NextResponse.json({ error: "DATABASE_URL is not set" }, { status: 500 });
-
-  const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
+  const userId = session.user.id;
+  const sql = getDb();
 
   try {
-    await sql`
-      CREATE TABLE IF NOT EXISTS tasks (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID NOT NULL,
-        title TEXT NOT NULL,
-        description TEXT,
-        status VARCHAR(16) NOT NULL DEFAULT 'todo',
-        category VARCHAR(16) NOT NULL DEFAULT 'task',
-        due_date TIMESTAMPTZ DEFAULT NOW(),
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `;
-
-    const userId = await getUserId(sql, session.user.id);
-    if (!userId) {
-      await sql.end();
-      return NextResponse.json({ tasks: [] });
-    }
+    await ensureTable(sql);
 
     const filter = req.nextUrl.searchParams.get("filter") ?? "all";
 
@@ -85,17 +80,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) return NextResponse.json({ error: "DATABASE_URL is not set" }, { status: 500 });
-
-  const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
+  const userId = session.user.id;
+  const sql = getDb();
 
   try {
-    const userId = await getUserId(sql, session.user.id);
-    if (!userId) {
-      await sql.end();
-      return NextResponse.json({ error: "No linked Telegram account" }, { status: 400 });
-    }
+    await ensureTable(sql);
 
     const body = (await req.json()) as {
       title: string;
@@ -109,6 +98,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Title is required" }, { status: 400 });
     }
 
+    const dueDate = body.dueDate ? new Date(body.dueDate).toISOString() : new Date().toISOString();
+
     const rows = await sql`
       INSERT INTO tasks (user_id, title, description, status, category, due_date)
       VALUES (
@@ -117,7 +108,7 @@ export async function POST(req: NextRequest) {
         ${body.description?.trim() ?? null},
         'todo',
         ${body.category ?? "task"},
-        ${body.dueDate ? new Date(body.dueDate).toISOString() : new Date().toISOString()}::timestamptz
+        ${dueDate}::timestamptz
       )
       RETURNING *
     `;
@@ -137,18 +128,10 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) return NextResponse.json({ error: "DATABASE_URL is not set" }, { status: 500 });
-
-  const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
+  const userId = session.user.id;
+  const sql = getDb();
 
   try {
-    const userId = await getUserId(sql, session.user.id);
-    if (!userId) {
-      await sql.end();
-      return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-    }
-
     const body = (await req.json()) as {
       id: string;
       title?: string;
@@ -201,18 +184,10 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) return NextResponse.json({ error: "DATABASE_URL is not set" }, { status: 500 });
-
-  const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
+  const userId = session.user.id;
+  const sql = getDb();
 
   try {
-    const userId = await getUserId(sql, session.user.id);
-    if (!userId) {
-      await sql.end();
-      return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
-    }
-
     const { id } = (await req.json()) as { id: string };
     if (!id) {
       await sql.end();
