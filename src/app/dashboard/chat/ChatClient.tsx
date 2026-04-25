@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, type FormEvent, type ChangeEvent } from "react";
+import DocumentManager from "./DocumentManager";
 
 interface Message {
   id: string;
@@ -26,6 +27,7 @@ export default function ChatClient() {
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
+  const [showDocs, setShowDocs] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -198,7 +200,13 @@ export default function ChatClient() {
         )}
         <div className="ml-auto flex gap-2">
           <button
-            onClick={() => setShowUpload((v) => !v)}
+            onClick={() => { setShowDocs((v) => !v); setShowUpload(false); }}
+            className="text-xs px-3 py-1 rounded-lg bg-slate-600 hover:bg-slate-500 text-white font-medium"
+          >
+            📋 Мои документы
+          </button>
+          <button
+            onClick={() => { setShowUpload((v) => !v); setShowDocs(false); }}
             className="text-xs px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
           >
             📎 Загрузить документ
@@ -243,6 +251,15 @@ export default function ChatClient() {
               {uploadResult}
             </p>
           )}
+        </div>
+      )}
+
+      {showDocs && (
+        <div className="flex flex-col gap-2 p-4 rounded-xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-800">
+          <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+            Загруженные документы
+          </p>
+          <DocumentManager onDelete={refreshStats} />
         </div>
       )}
 
