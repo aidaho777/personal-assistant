@@ -1,11 +1,12 @@
 import { db } from "@/db";
 import { sql } from "drizzle-orm";
+import { fetchWithRetry } from "@/lib/fetch-with-retry";
 
 async function getEmbedding(text: string): Promise<number[]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
 
-  const res = await fetch("https://api.openai.com/v1/embeddings", {
+  const res = await fetchWithRetry("https://api.openai.com/v1/embeddings", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -13,11 +14,6 @@ async function getEmbedding(text: string): Promise<number[]> {
     },
     body: JSON.stringify({ model: "text-embedding-3-small", input: text }),
   });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OpenAI embeddings error: ${err}`);
-  }
 
   const data = (await res.json()) as { data: { embedding: number[] }[] };
   return data.data[0].embedding;

@@ -1,4 +1,5 @@
 import type { SearchResult } from "./rag-search";
+import { fetchWithRetry } from "@/lib/fetch-with-retry";
 
 const SYSTEM_PROMPT = `Ты — персональный ассистент. Отвечай на вопросы используя предоставленный контекст из документов пользователя.
 Если ответа нет в контексте — честно скажи об этом.
@@ -21,7 +22,7 @@ export async function generateAnswer(query: string, chunks: SearchResult[]): Pro
 
   const context = buildContext(chunks);
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await fetchWithRetry("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -39,11 +40,6 @@ export async function generateAnswer(query: string, chunks: SearchResult[]): Pro
       max_tokens: 1024,
     }),
   });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OpenAI chat error: ${err}`);
-  }
 
   const data = (await res.json()) as { choices: { message: { content: string } }[] };
   return data.choices[0].message.content;

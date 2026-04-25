@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import postgres from "postgres";
 import { extractText, getDocumentProxy } from "unpdf";
+import { fetchWithRetry } from "@/lib/fetch-with-retry";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -34,7 +35,7 @@ async function getBatchEmbeddings(texts: string[]): Promise<number[][]> {
   // Truncate each text to avoid token limit
   const safeTexts = texts.map((t) => t.slice(0, 4000));
 
-  const res = await fetch("https://api.openai.com/v1/embeddings", {
+  const res = await fetchWithRetry("https://api.openai.com/v1/embeddings", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -45,11 +46,6 @@ async function getBatchEmbeddings(texts: string[]): Promise<number[][]> {
       input: safeTexts,
     }),
   });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OpenAI embeddings error: ${err}`);
-  }
 
   const data = (await res.json()) as { data: { index: number; embedding: number[] }[] };
   // Sort by index to ensure correct order

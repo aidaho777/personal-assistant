@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import postgres from "postgres";
+import { fetchWithRetry } from "@/lib/fetch-with-retry";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -8,7 +9,7 @@ export const maxDuration = 30;
 async function getEmbedding(text: string): Promise<number[]> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
-  const res = await fetch("https://api.openai.com/v1/embeddings", {
+  const res = await fetchWithRetry("https://api.openai.com/v1/embeddings", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -16,10 +17,6 @@ async function getEmbedding(text: string): Promise<number[]> {
     },
     body: JSON.stringify({ model: "text-embedding-3-small", input: text.slice(0, 6000) }),
   });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OpenAI embeddings error: ${err}`);
-  }
   const data = (await res.json()) as { data: { embedding: number[] }[] };
   return data.data[0].embedding;
 }
@@ -44,7 +41,7 @@ async function generateAnswer(
     chunks.length > 0
       ? `Контекст из документов:\n\n${context}\n\n---\n\nВопрос: ${question}`
       : `Вопрос: ${question}`;
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await fetchWithRetry("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -60,10 +57,6 @@ async function generateAnswer(
       max_tokens: 1000,
     }),
   });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OpenAI chat error: ${err}`);
-  }
   const data = (await res.json()) as {
     choices: { message: { content: string } }[];
   };
