@@ -25,6 +25,7 @@ import {
 import { recognizeSpeech } from "./yandex-speechkit";
 import { extractTask } from "./task-extractor";
 import { db, schema } from "../db";
+import { eq, and } from "drizzle-orm";
 import type { User } from "../db/schema";
 
 // ─── Bot singleton ──────────────────────────────────────────────────────
@@ -161,6 +162,36 @@ function registerHandlers(bot: Telegraf) {
     );
   });
 
+  // /tasks command
+  bot.command("tasks", async (ctx) => {
+    const user = (ctx as unknown as AuthContext).dbUser;
+    try {
+      const rows = await db
+        .select()
+        .from(schema.tasks)
+        .where(and(eq(schema.tasks.userId, user.id), eq(schema.tasks.status, "todo")))
+        .orderBy(schema.tasks.dueDate)
+        .limit(10);
+
+      if (rows.length === 0) {
+        await ctx.reply("📋 У вас нет активных задач.");
+        return;
+      }
+
+      const lines = rows.map((t, i) => {
+        const due = t.dueDate
+          ? ` 📅 ${t.dueDate.toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}`
+          : "";
+        return `${i + 1}. ${t.title}${due}`;
+      });
+
+      await ctx.reply(`📋 *Ваши задачи:*\n\n${lines.join("\n")}`, { parse_mode: "Markdown" });
+    } catch (e) {
+      console.error("[Bot] /tasks error:", e);
+      await ctx.reply("❌ Ошибка при получении задач.");
+    }
+  });
+
   // ── File handlers ─────────────────────────────────────────────────
 
   // Documents
@@ -229,6 +260,8 @@ function registerHandlers(bot: Telegraf) {
           rawMessage: text,
           dueDate: taskResult.dueDate ? new Date(taskResult.dueDate) : null,
           source: "telegram",
+          status: "todo",
+          priority: "medium",
         });
         const dateStr = taskResult.dueDate
           ? new Date(taskResult.dueDate).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
@@ -374,6 +407,8 @@ async function processFile(ctx: Context, user: User, input: FileInput) {
               rawMessage: transcriptionText,
               dueDate: taskResult.dueDate ? new Date(taskResult.dueDate) : null,
               source: "telegram",
+              status: "todo",
+              priority: "medium",
             });
             const dateStr = taskResult.dueDate
               ? new Date(taskResult.dueDate).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
