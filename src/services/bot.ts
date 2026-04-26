@@ -209,6 +209,8 @@ function registerHandlers(bot: Telegraf) {
       `/stats — ваша статистика\n` +
       `/list — последние 5 файлов\n` +
       `/list ИмяТега — файлы по тегу\n` +
+      `/tasks — активные задачи\n` +
+      `/upcoming — задачи на ближайшие 2 дня\n` +
       `/status — проверка сервисов`,
       { parse_mode: "Markdown" }
     );
@@ -299,6 +301,46 @@ function registerHandlers(bot: Telegraf) {
     } catch (e) {
       await sql.end().catch(() => {});
       console.error("[Bot] /tasks error:", e);
+      await ctx.reply("❌ Ошибка при получении задач.");
+    }
+  });
+
+  // /upcoming command — tasks for the next 48 hours
+  bot.command("upcoming", async (ctx) => {
+    const user = (ctx as unknown as AuthContext).dbUser;
+    const sql = getTaskDb();
+    try {
+      const rows = await sql`
+        SELECT title, due_date, status FROM tasks
+        WHERE user_id = ${user.id}::uuid
+          AND status IN ('todo', 'in_progress')
+          AND due_date IS NOT NULL
+          AND due_date < NOW() + INTERVAL '48 hours'
+        ORDER BY due_date ASC
+        LIMIT 10
+      `;
+      await sql.end();
+
+      if (rows.length === 0) {
+        await ctx.reply("📋 Нет задач на ближайшие 2 дня.");
+        return;
+      }
+
+      const now = new Date();
+      const todayStr = now.toDateString();
+      const lines = rows.map((t) => {
+        const d = new Date(t.due_date as string);
+        const isPast = d < now;
+        const isToday = d.toDateString() === todayStr;
+        const prefix = isPast ? "🔴 Просрочено" : isToday ? "🟠 Сегодня" : "🟡 Завтра";
+        const time = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+        return `${prefix} ${time} — ${t.title}`;
+      });
+
+      await ctx.reply(`📅 *Ближайшие задачи:*\n\n${lines.join("\n")}`, { parse_mode: "Markdown" });
+    } catch (e) {
+      await sql.end().catch(() => {});
+      console.error("[Bot] /upcoming error:", e);
       await ctx.reply("❌ Ошибка при получении задач.");
     }
   });

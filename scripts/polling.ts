@@ -7,6 +7,7 @@
  */
 import "dotenv/config";
 import { getBot } from "../src/services/bot";
+import { checkDeadlines } from "../src/services/deadline-checker";
 
 const MAX_RETRIES = 10;
 const RETRY_DELAY_MS = 10_000; // 10 seconds between retries
@@ -33,6 +34,15 @@ async function startPolling(attempt = 1): Promise<void> {
   try {
     await bot.launch({ dropPendingUpdates: true });
     console.log("✅ Bot is running and polling for updates!");
+
+    // Deadline checker — every 30 minutes
+    console.log("[Bot] Starting deadline checker (every 30 min)...");
+    setInterval(() => {
+      checkDeadlines(bot).catch((e) => console.error("[Deadlines] Error:", e));
+    }, 30 * 60 * 1000);
+    setTimeout(() => {
+      checkDeadlines(bot).catch((e) => console.error("[Deadlines] Error:", e));
+    }, 60 * 1000);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
 

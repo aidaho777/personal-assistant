@@ -123,6 +123,7 @@ export const tasks = pgTable(
     rawMessage: text("raw_message"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    notifiedAt: timestamp("notified_at", { withTimezone: true }),
   },
   (table) => ({
     userIdIdx: index("tasks_user_id_idx").on(table.userId),

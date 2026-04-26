@@ -33,6 +33,7 @@ async function ensureTable(sql: ReturnType<typeof postgres>) {
   try { await sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS raw_message TEXT`; } catch { /* ignore */ }
   try { await sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`; } catch { /* ignore */ }
   try { await sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'todo'`; } catch { /* ignore */ }
+  try { await sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ`; } catch { /* ignore */ }
   // Drop old columns that no longer exist in schema
   try { await sql`ALTER TABLE tasks DROP COLUMN IF EXISTS web_user_id`; } catch { /* ignore */ }
   try { await sql`ALTER TABLE tasks DROP COLUMN IF EXISTS is_completed`; } catch { /* ignore */ }
