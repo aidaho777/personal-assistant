@@ -16,7 +16,7 @@ export const authConfig: NextAuthConfig = {
       const publicPaths = ["/login", "/register"];
       const isPublic = pathname === "/" || publicPaths.some(p => pathname.startsWith(p));
       const isApiAuth = pathname.startsWith("/api/auth");
-      const isBotApi = pathname.startsWith("/api/telegram") || pathname.startsWith("/api/health");
+      const isBotApi = pathname.startsWith("/api/telegram") || pathname.startsWith("/api/health") || pathname.startsWith("/api/debug");
 
       if (isPublic || isApiAuth || isBotApi) return true;
       if (isLoggedIn) return true;
