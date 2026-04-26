@@ -218,10 +218,13 @@ export async function POST(req: NextRequest) {
 
       console.log("[RAG Chat] Final: method=%s, chunks=%d, hasDocuments=%s", searchMethod, topChunks.length, hasDocuments);
 
+      const sourceFiles = [...new Set(topChunks.map((c) => c.fileName).filter(Boolean))];
+
       const answer = await generateAnswer(message, topChunks, hasDocuments);
       return NextResponse.json({
         answer,
         sources: topChunks.length,
+        sourceFiles,
         searchMethod,
         hasDocuments,
       });
