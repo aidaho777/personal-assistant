@@ -65,6 +65,48 @@ export interface SyncResult {
   errors: number;
   total: number;
   details: string[];
+  error?: string;
+}
+
+async function getGoogleAccessToken(sql: ReturnType<typeof postgres>, userId: string): Promise<string | null> {
+  const rows = await sql`
+    SELECT id, access_token, refresh_token, expires_at FROM linked_accounts
+    WHERE user_id = ${userId}::uuid AND provider = 'google'
+    LIMIT 1
+  `;
+  if (rows.length === 0) return null;
+
+  const linked = rows[0];
+  const now = Math.floor(Date.now() / 1000);
+
+  if (linked.expires_at && (linked.expires_at as number) < now && linked.refresh_token) {
+    try {
+      const res = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: process.env.GOOGLE_OAUTH_CLIENT_ID!,
+          client_secret: process.env.GOOGLE_OAUTH_CLIENT_SECRET!,
+          refresh_token: linked.refresh_token as string,
+          grant_type: "refresh_token",
+        }),
+      });
+      const tokens = (await res.json()) as { access_token?: string; expires_in?: number };
+      if (tokens.access_token) {
+        const newExpiry = tokens.expires_in ? now + tokens.expires_in : null;
+        await sql`
+          UPDATE linked_accounts SET access_token = ${tokens.access_token}, expires_at = ${newExpiry}, updated_at = NOW()
+          WHERE id = ${linked.id}::uuid
+        `;
+        console.log("[DriveSync] Refreshed access token");
+        return tokens.access_token;
+      }
+    } catch (e) {
+      console.error("[DriveSync] Token refresh failed:", e);
+    }
+  }
+
+  return linked.access_token as string | null;
 }
 
 async function downloadWithToken(fileId: string, accessToken: string): Promise<Buffer> {
@@ -82,12 +124,22 @@ async function downloadWithToken(fileId: string, accessToken: string): Promise<B
   return Buffer.from(res.data as ArrayBuffer);
 }
 
-export async function syncDriveDocuments(webUserId: string, accessToken: string): Promise<SyncResult> {
+export async function syncDriveDocuments(webUserId: string): Promise<SyncResult> {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error("DATABASE_URL is not set");
 
   const sql = postgres(dbUrl, { max: 3, idle_timeout: 20, connect_timeout: 10 });
   const result: SyncResult = { synced: 0, skipped: 0, errors: 0, total: 0, details: [] };
+
+  let accessToken: string | null = null;
+  try {
+    accessToken = await getGoogleAccessToken(sql, webUserId);
+  } catch { /* table might not exist yet */ }
+
+  if (!accessToken) {
+    await sql.end();
+    return { ...result, error: "Google Drive не привязан. Привяжите в Settings." };
+  }
 
   try {
     // Get ALL successful document/text uploads — no user filter (single-user MVP)

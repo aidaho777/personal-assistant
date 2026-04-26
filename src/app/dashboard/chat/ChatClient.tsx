@@ -173,7 +173,7 @@ export default function ChatClient() {
         setSyncResult(`✅ Синхронизировано: ${data.synced} из ${data.total} (пропущено: ${data.skipped}, ошибок: ${data.errors})${detailStr}`);
         refreshStats();
       } else if (res.status === 403) {
-        setSyncResult("⚠️ Нет доступа к Google Drive. Выйдите из аккаунта и войдите заново через Google.");
+        setSyncResult("⚠️ Google Drive не привязан. Привяжите в Settings → Google Drive.");
       } else {
         setSyncResult(`❌ ${data.error ?? "Ошибка синхронизации"}`);
       }

@@ -11,16 +11,11 @@ export async function POST() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const accessToken = (session as unknown as Record<string, unknown>).accessToken as string | undefined;
-  if (!accessToken) {
-    return NextResponse.json(
-      { error: "Нет доступа к Google Drive. Выйдите и войдите заново через Google." },
-      { status: 403 }
-    );
-  }
-
   try {
-    const result = await syncDriveDocuments(session.user.id, accessToken);
+    const result = await syncDriveDocuments(session.user.id);
+    if (result.error) {
+      return NextResponse.json(result, { status: 403 });
+    }
     return NextResponse.json(result);
   } catch (error) {
     console.error("[SyncDrive] Error:", error);
