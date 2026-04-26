@@ -1,8 +1,10 @@
+import { Suspense } from "react";
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import { db, schema } from "@/db";
 import { eq } from "drizzle-orm";
 import SettingsForm from "./SettingsForm";
+import GoogleDriveLink from "./GoogleDriveLink";
 
 const { webUsers } = schema;
 
@@ -46,6 +48,11 @@ export default async function SettingsPage() {
           </div>
           <SettingsForm initialName={user.name ?? ""} hasPassword={!!user.passwordHash} />
         </div>
+
+        {/* Google Drive */}
+        <Suspense fallback={<div className="text-slate-400 text-sm animate-pulse p-6">Загрузка...</div>}>
+          <GoogleDriveLink />
+        </Suspense>
 
         {/* Telegram link */}
         <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6">

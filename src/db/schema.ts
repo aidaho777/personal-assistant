@@ -130,3 +130,25 @@ export const tasks = pgTable(
 );
 export type Task = typeof tasks.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;
+
+// ─── linked_accounts table (OAuth providers) ─────────────────────────
+export const linkedAccounts = pgTable(
+  "linked_accounts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => webUsers.id),
+    provider: varchar("provider", { length: 32 }).notNull(),
+    providerAccountId: varchar("provider_account_id", { length: 255 }).notNull(),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    expiresAt: integer("expires_at"),
+    email: varchar("email", { length: 255 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    userProviderIdx: index("linked_accounts_user_provider_idx").on(table.userId, table.provider),
+  })
+);
