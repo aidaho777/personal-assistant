@@ -113,18 +113,18 @@ export const tasks = pgTable(
   "tasks",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    userId: uuid("user_id").notNull(),
+    userId: uuid("user_id").notNull().references(() => users.id),
+    webUserId: uuid("web_user_id").references(() => webUsers.id),
     title: text("title").notNull(),
-    description: text("description"),
-    status: varchar("status", { length: 16 }).notNull().default("todo"),
-    category: varchar("category", { length: 16 }).notNull().default("task"),
+    rawMessage: text("raw_message"),
     dueDate: timestamp("due_date", { withTimezone: true }),
+    isCompleted: boolean("is_completed").notNull().default(false),
+    source: varchar("source", { length: 16 }).notNull().default("telegram"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     userIdIdx: index("tasks_user_id_idx").on(table.userId),
-    statusIdx: index("tasks_status_idx").on(table.status),
+    webUserIdIdx: index("tasks_web_user_id_idx").on(table.webUserId),
     dueDateIdx: index("tasks_due_date_idx").on(table.dueDate),
   })
 );
