@@ -1,5 +1,5 @@
 import postgres from "postgres";
-import { downloadFileFromDrive } from "./google-drive";
+import { google } from "googleapis";
 import { extractText, getDocumentProxy } from "unpdf";
 import { extractTextFromPdfWithOCR, isTextGarbage } from "./pdf-ocr";
 import { fetchWithRetry } from "@/lib/fetch-with-retry";
@@ -67,7 +67,22 @@ export interface SyncResult {
   details: string[];
 }
 
-export async function syncDriveDocuments(webUserId: string): Promise<SyncResult> {
+async function downloadWithToken(fileId: string, accessToken: string): Promise<Buffer> {
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_OAUTH_CLIENT_ID,
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET
+  );
+  oauth2Client.setCredentials({ access_token: accessToken });
+
+  const drive = google.drive({ version: "v3", auth: oauth2Client });
+  const res = await drive.files.get(
+    { fileId, alt: "media" },
+    { responseType: "arraybuffer" }
+  );
+  return Buffer.from(res.data as ArrayBuffer);
+}
+
+export async function syncDriveDocuments(webUserId: string, accessToken: string): Promise<SyncResult> {
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error("DATABASE_URL is not set");
 
@@ -114,7 +129,7 @@ export async function syncDriveDocuments(webUserId: string): Promise<SyncResult>
         console.log("[DriveSync] Downloading:", fileName, "driveFileId:", driveFileId);
         let buffer: Buffer;
         try {
-          buffer = await downloadFileFromDrive(driveFileId);
+          buffer = await downloadWithToken(driveFileId, accessToken);
         } catch (dlErr) {
           console.error("[DriveSync] Download failed:", fileName, dlErr);
           result.details.push(`${fileName}: download failed — ${String(dlErr)}`);

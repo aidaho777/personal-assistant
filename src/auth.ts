@@ -49,10 +49,36 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
     Google({
       clientId: process.env.GOOGLE_OAUTH_CLIENT_ID ?? "",
       clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? "",
+      authorization: {
+        params: {
+          scope: "openid email profile https://www.googleapis.com/auth/drive.readonly",
+          access_type: "offline",
+          prompt: "consent",
+        },
+      },
     }),
   ],
   callbacks: {
-    ...authConfig.callbacks,
+    authorized: authConfig.callbacks!.authorized!,
+    async jwt({ token, user, account }) {
+      if (user) {
+        token.id = user.id;
+        token.role = (user as { role?: string }).role ?? "user";
+      }
+      if (account?.provider === "google") {
+        token.accessToken = account.access_token;
+        token.refreshToken = account.refresh_token;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      if (session.user) {
+        session.user.id = token.id as string;
+        (session.user as { role?: string }).role = token.role as string;
+      }
+      (session as unknown as Record<string, unknown>).accessToken = token.accessToken;
+      return session;
+    },
     async signIn({ user, account }) {
       if (account?.provider === "google" && user.email) {
         const [existing] = await db
