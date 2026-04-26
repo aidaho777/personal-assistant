@@ -259,6 +259,8 @@ function registerHandlers(bot: Telegraf) {
     const user = (ctx as unknown as AuthContext).dbUser;
     const text = ctx.message.text;
 
+    console.log("[Bot] TEXT received:", text.substring(0, 50));
+
     if (text.startsWith("/")) return;
 
     // ── Check if message is a task ──
