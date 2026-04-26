@@ -34,39 +34,43 @@ function getTaskDb() {
   return postgres(url, { max: 3, idle_timeout: 20, connect_timeout: 10 });
 }
 
-const TASK_KEYWORDS_REGEX = /^(новая\s+)?задача|^зафиксируй|^запиши\s+задачу|^напомни|^запланируй|^нужно|^не забыть|^todo/i;
+const TASK_KEYWORDS_REGEX = /задач[уа]|напомни|запланируй|нужно|не забыть|todo|поставь.*задач|запиши.*задач|зафиксируй|добавь.*задач/i;
 
 /**
  * If `text` looks like a task command, parse it and INSERT into tasks table.
  * Returns { created, title, dueDate } so the caller can format the reply.
+ *
+ * Handles cases like "Добрый день прошу поставить на завтра задачу приготовить завтрак":
+ * date is parsed from the full text first, then everything up to the task
+ * keyword is stripped to get the title.
  */
 async function tryCreateTaskFromText(text: string, userId: string): Promise<{ created: boolean; title?: string; dueDate?: string | null }> {
   if (!TASK_KEYWORDS_REGEX.test(text)) return { created: false };
 
-  let taskTitle = text
-    .replace(/^(?:новая\s+)?задача\s*[-–:\s]*/i, "")
-    .replace(/^зафиксируй\s*(?:задачу\s*)?[-–:\s]*/i, "")
-    .replace(/^запиши\s+задачу\s*[-–:\s]*/i, "")
-    .replace(/^напомни\s*[-–:\s]*/i, "")
-    .replace(/^запланируй\s*[-–:\s]*/i, "")
-    .replace(/^нужно\s*[-–:\s]*/i, "")
-    .replace(/^не забыть\s*[-–:\s]*/i, "")
-    .replace(/^todo\s*[-–:\s]*/i, "")
-    .trim();
-
-  if (!taskTitle) taskTitle = text;
-
+  // 1. Parse date from the full text (so we don't lose it when stripping the prefix)
+  let workingText = text;
   let dueDate: string | null = null;
 
-  if (/на завтра/i.test(taskTitle)) {
+  if (/послезавтра/i.test(workingText)) {
+    const d = new Date();
+    d.setDate(d.getDate() + 2);
+    d.setHours(9, 0, 0, 0);
+    dueDate = d.toISOString();
+    workingText = workingText.replace(/послезавтра\s*/i, "");
+  } else if (/на завтра|завтра/i.test(workingText)) {
     const d = new Date();
     d.setDate(d.getDate() + 1);
     d.setHours(9, 0, 0, 0);
     dueDate = d.toISOString();
-    taskTitle = taskTitle.replace(/на завтра\s*/i, "").replace(/^\s*[-–]\s*/, "").trim();
+    workingText = workingText.replace(/(?:на\s+)?завтра\s*/i, "");
+  } else if (/сегодня/i.test(workingText)) {
+    const d = new Date();
+    d.setHours(d.getHours() + 1, 0, 0, 0);
+    dueDate = d.toISOString();
+    workingText = workingText.replace(/сегодня\s*/i, "");
   }
 
-  const dayMatch = taskTitle.match(/(?:в |во )(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)/i);
+  const dayMatch = workingText.match(/(?:в |во )(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)/i);
   if (!dueDate && dayMatch) {
     const days: Record<string, number> = { "воскресенье": 0, "понедельник": 1, "вторник": 2, "среду": 3, "четверг": 4, "пятницу": 5, "субботу": 6 };
     const target = days[dayMatch[1].toLowerCase()];
@@ -78,19 +82,31 @@ async function tryCreateTaskFromText(text: string, userId: string): Promise<{ cr
       d.setHours(9, 0, 0, 0);
       dueDate = d.toISOString();
     }
-    taskTitle = taskTitle.replace(dayMatch[0], "").trim();
+    workingText = workingText.replace(dayMatch[0], "");
   }
 
-  const timeMatch = taskTitle.match(/в\s*(\d{1,2})[:\-](\d{2})/);
+  const timeMatch = workingText.match(/в\s*(\d{1,2})[:\-](\d{2})/);
   if (timeMatch) {
     const d = dueDate ? new Date(dueDate) : new Date();
     if (!dueDate) d.setDate(d.getDate() + 1);
     d.setHours(parseInt(timeMatch[1]), parseInt(timeMatch[2]), 0, 0);
     dueDate = d.toISOString();
-    taskTitle = taskTitle.replace(timeMatch[0], "").trim();
+    workingText = workingText.replace(timeMatch[0], "");
   }
 
-  taskTitle = taskTitle.replace(/^\s*[-–]\s*/, "").replace(/\s*[-–]\s*$/, "").trim();
+  // 2. Strip everything up to and including the task keyword (lazy match)
+  let taskTitle = workingText
+    .replace(/^.*?задач[уа]\s*[-–:,\s]*/i, "")
+    .replace(/^.*?напомни(?:те)?\s*[-–:,\s]*/i, "")
+    .replace(/^.*?запланируй(?:те)?\s*[-–:,\s]*/i, "")
+    .replace(/^.*?не\s+забыть\s*[-–:,\s]*/i, "")
+    .replace(/^.*?нужно\s*[-–:,\s]*/i, "")
+    .replace(/^.*?todo\s*[-–:,\s]*/i, "")
+    .replace(/^.*?зафиксируй\s*(?:задачу\s*)?[-–:,\s]*/i, "")
+    .trim();
+
+  // Final cleanup
+  taskTitle = taskTitle.replace(/^\s*[-–:,]\s*/, "").replace(/\s*[-–:,]\s*$/, "").trim();
   if (!taskTitle) taskTitle = text;
 
   console.log("[Bot] Creating task:", taskTitle, "due:", dueDate);
