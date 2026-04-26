@@ -24,9 +24,92 @@ import {
 } from "../lib/helpers";
 import { recognizeSpeech } from "./yandex-speechkit";
 import { extractTask } from "./task-extractor";
-import { db, schema } from "../db";
-import { eq, and } from "drizzle-orm";
+import { db } from "../db";
+import { sql as drizzleSql } from "drizzle-orm";
 import type { User } from "../db/schema";
+
+// ─── Task detection helpers ─────────────────────────────────────────────
+
+const taskPatterns = [
+  /(?:новая\s+)?задача\s*[-–:]\s*(.+)/i,
+  /зафиксируй\s+задачу\s*[-–:]\s*(.+)/i,
+  /добавь\s+задачу\s*[-–:]\s*(.+)/i,
+  /создай\s+задачу\s*[-–:]\s*(.+)/i,
+  /напомни\s+(?:мне\s+)?(?:что\s+)?(.+)/i,
+  /нужно\s+(?:не\s+забыть\s+)?(.+)/i,
+  /не\s+забудь\s+(.+)/i,
+  /сделать\s*[-–:]\s*(.+)/i,
+  /\btodo\s*[-–:]\s*(.+)/i,
+  /\btask\s*[-–:]\s*(.+)/i,
+];
+
+const weekdays: Record<string, number> = {
+  понедельник: 1, вторник: 2, среду: 3, среда: 3,
+  четверг: 4, пятницу: 5, пятница: 5,
+  субботу: 6, суббота: 6, воскресенье: 0,
+};
+
+function extractDateTime(text: string): { date: Date | null; cleanTitle: string } {
+  let clean = text;
+  let date: Date | null = null;
+  const now = new Date();
+
+  if (/\bпослезавтра\b/i.test(clean)) {
+    date = new Date(now); date.setDate(date.getDate() + 2);
+    clean = clean.replace(/\bпослезавтра\b/i, "");
+  } else if (/\bзавтра\b/i.test(clean)) {
+    date = new Date(now); date.setDate(date.getDate() + 1);
+    clean = clean.replace(/\bзавтра\b/i, "");
+  } else if (/\bсегодня\b/i.test(clean)) {
+    date = new Date(now);
+    clean = clean.replace(/\bсегодня\b/i, "");
+  }
+
+  const wdMatch = clean.match(/\b(?:в\s+)?(понедельник|вторник|среду?|четверг|пятницу?|субботу?|воскресенье)\b/i);
+  if (wdMatch) {
+    const target = weekdays[wdMatch[1].toLowerCase()];
+    if (target !== undefined) {
+      if (!date) date = new Date(now);
+      const diff = ((target - date.getDay()) + 7) % 7 || 7;
+      date.setDate(date.getDate() + diff);
+    }
+    clean = clean.replace(wdMatch[0], "");
+  }
+
+  const inMatch = clean.match(/\bчерез\s+(\d+)\s+(день|дня|дней|час|часа|часов)\b/i);
+  if (inMatch) {
+    const n = parseInt(inMatch[1]);
+    if (!date) date = new Date(now);
+    if (inMatch[2].startsWith("д")) date.setDate(date.getDate() + n);
+    else date.setHours(date.getHours() + n);
+    clean = clean.replace(inMatch[0], "");
+  }
+
+  const timeMatch = clean.match(/\bв\s+(\d{1,2})(?::(\d{2}))?\s*(?:час[аов]*|ч\.?)?\b/i);
+  if (timeMatch) {
+    if (!date) date = new Date(now);
+    date.setHours(parseInt(timeMatch[1]), timeMatch[2] ? parseInt(timeMatch[2]) : 0, 0, 0);
+    clean = clean.replace(timeMatch[0], "");
+  }
+
+  const cleanTitle = clean.replace(/\s{2,}/g, " ").replace(/^[-–,\s]+|[-–,\s]+$/g, "").trim();
+  return { date, cleanTitle };
+}
+
+function matchTaskPattern(text: string): string | null {
+  for (const pattern of taskPatterns) {
+    const m = text.match(pattern);
+    if (m?.[1]?.trim()) return m[1].trim();
+  }
+  return null;
+}
+
+async function insertTask(userId: string, title: string, rawMessage: string, dueDate: Date | null): Promise<void> {
+  await db.execute(drizzleSql`
+    INSERT INTO tasks (user_id, title, raw_message, due_date, source, status, priority)
+    VALUES (${userId}::uuid, ${title}, ${rawMessage}, ${dueDate ? dueDate.toISOString() : null}::timestamptz, 'telegram', 'todo', 'medium')
+  `);
+}
 
 // ─── Bot singleton ──────────────────────────────────────────────────────
 
@@ -166,12 +249,13 @@ function registerHandlers(bot: Telegraf) {
   bot.command("tasks", async (ctx) => {
     const user = (ctx as unknown as AuthContext).dbUser;
     try {
-      const rows = await db
-        .select({ id: schema.tasks.id, title: schema.tasks.title, dueDate: schema.tasks.dueDate })
-        .from(schema.tasks)
-        .where(and(eq(schema.tasks.userId, user.id), eq(schema.tasks.status, "todo")))
-        .orderBy(schema.tasks.dueDate)
-        .limit(10);
+      const rows = (await db.execute(drizzleSql`
+        SELECT id, title, due_date
+        FROM tasks
+        WHERE user_id = ${user.id}::uuid AND status = 'todo'
+        ORDER BY due_date ASC NULLS LAST
+        LIMIT 10
+      `)) as unknown as { id: string; title: string; due_date: string | null }[];
 
       if (rows.length === 0) {
         await ctx.reply("📋 У вас нет активных задач.");
@@ -179,8 +263,8 @@ function registerHandlers(bot: Telegraf) {
       }
 
       const lines = rows.map((t, i) => {
-        const due = t.dueDate
-          ? ` 📅 ${t.dueDate.toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}`
+        const due = t.due_date
+          ? ` 📅 ${new Date(t.due_date).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}`
           : "";
         return `${i + 1}. ${t.title}${due}`;
       });
@@ -250,23 +334,34 @@ function registerHandlers(bot: Telegraf) {
 
     if (text.startsWith("/")) return;
 
-    // Check if this is a task BEFORE saving as note
+    // 1. Regex-based task detection (fast, no API call)
+    const regexMatch = matchTaskPattern(text);
+    if (regexMatch) {
+      const { date, cleanTitle } = extractDateTime(regexMatch);
+      const title = cleanTitle || regexMatch;
+      try {
+        await insertTask(user.id, title, text, date);
+        const dateStr = date
+          ? date.toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
+          : "без даты";
+        await ctx.reply(`✅ Задача добавлена: *${title}*\n📅 ${dateStr}`, { parse_mode: "Markdown" });
+      } catch (e) {
+        console.error("[Collector] Task insert error:", e);
+        await ctx.reply("❌ Не удалось сохранить задачу.");
+      }
+      return;
+    }
+
+    // 2. LLM-based task detection (fallback for natural language)
     try {
       const taskResult = await extractTask(text);
       if (taskResult.isTask && taskResult.title) {
-        await db.insert(schema.tasks).values({
-          userId: user.id,
-          title: taskResult.title,
-          rawMessage: text,
-          dueDate: taskResult.dueDate ? new Date(taskResult.dueDate) : null,
-          source: "telegram",
-          status: "todo",
-          priority: "medium",
-        });
-        const dateStr = taskResult.dueDate
-          ? new Date(taskResult.dueDate).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
+        const dueDate = taskResult.dueDate ? new Date(taskResult.dueDate) : null;
+        await insertTask(user.id, taskResult.title, text, dueDate);
+        const dateStr = dueDate
+          ? dueDate.toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
           : "без даты";
-        await ctx.reply(`✅ Задача добавлена: ${taskResult.title}\n📅 ${dateStr}`);
+        await ctx.reply(`✅ Задача добавлена: *${taskResult.title}*\n📅 ${dateStr}`, { parse_mode: "Markdown" });
         return;
       }
     } catch (taskErr) {
@@ -397,26 +492,37 @@ async function processFile(ctx: Context, user: User, input: FileInput) {
           console.error("[Collector] Error uploading transcription:", uploadErr);
         }
 
-        try {
-          const taskResult = await extractTask(transcriptionText);
-          if (taskResult.isTask && taskResult.title) {
-            const user = (ctx as unknown as AuthContext).dbUser;
-            await db.insert(schema.tasks).values({
-              userId: user.id,
-              title: taskResult.title,
-              rawMessage: transcriptionText,
-              dueDate: taskResult.dueDate ? new Date(taskResult.dueDate) : null,
-              source: "telegram",
-              status: "todo",
-              priority: "medium",
-            });
-            const dateStr = taskResult.dueDate
-              ? new Date(taskResult.dueDate).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
+        // Regex check first, then LLM fallback
+        let voiceTaskSaved = false;
+        const voiceRegexMatch = matchTaskPattern(transcriptionText);
+        if (voiceRegexMatch) {
+          const { date, cleanTitle } = extractDateTime(voiceRegexMatch);
+          const title = cleanTitle || voiceRegexMatch;
+          try {
+            await insertTask(user.id, title, transcriptionText, date);
+            const dateStr = date
+              ? date.toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
               : "без даты";
-            await ctx.reply(`✅ Задача добавлена: ${taskResult.title}\n📅 ${dateStr}`);
+            await ctx.reply(`✅ Задача добавлена: *${title}*\n📅 ${dateStr}`, { parse_mode: "Markdown" });
+            voiceTaskSaved = true;
+          } catch (e) {
+            console.error("[Collector] Voice task insert error:", e);
           }
-        } catch (taskErr) {
-          console.error("[Collector] Voice task extraction error:", taskErr);
+        }
+        if (!voiceTaskSaved) {
+          try {
+            const taskResult = await extractTask(transcriptionText);
+            if (taskResult.isTask && taskResult.title) {
+              const dueDate = taskResult.dueDate ? new Date(taskResult.dueDate) : null;
+              await insertTask(user.id, taskResult.title, transcriptionText, dueDate);
+              const dateStr = dueDate
+                ? dueDate.toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
+                : "без даты";
+              await ctx.reply(`✅ Задача добавлена: *${taskResult.title}*\n📅 ${dateStr}`, { parse_mode: "Markdown" });
+            }
+          } catch (taskErr) {
+            console.error("[Collector] Voice task extraction error:", taskErr);
+          }
         }
       }
     }
