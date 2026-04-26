@@ -1,48 +1,57 @@
-import { env } from "../lib/env";
-
 /**
- * Check Yandex SpeechKit connectivity by verifying env vars are set.
- * We don't make a real API call to avoid costs — just validate config.
+ * Synchronous speech recognition via Yandex SpeechKit.
+ * Suitable for audio up to 30 sec / 1 MB (standard Telegram voice messages).
+ * Endpoint: POST https://stt.api.cloud.yandex.net/speech/v1/stt:recognize
+ *
+ * Returns "" if env vars are missing or recognition fails — never throws.
  */
+
 export function checkSpeechKitConnection(): boolean {
-  try {
-    const apiKey = env.YANDEX_CLOUD_API_KEY;
-    const folderId = env.YANDEX_CLOUD_FOLDER_ID;
-    return !!(apiKey && folderId);
-  } catch {
-    return false;
-  }
+  return !!(process.env.YANDEX_CLOUD_API_KEY && process.env.YANDEX_CLOUD_FOLDER_ID);
 }
 
-/**
- * Recognize speech using Yandex SpeechKit synchronous API.
- * https://yandex.cloud/ru/docs/speechkit/stt/request
- * 
- * @param audioBuffer The OGG Opus audio buffer to recognize
- * @returns Recognized text
- */
-export async function recognizeSpeech(audioBuffer: Buffer): Promise<string> {
-  const url = `https://stt.api.cloud.yandex.net/speech/v1/stt:recognize?folderId=${env.YANDEX_CLOUD_FOLDER_ID}&topic=general&lang=ru-RU&format=oggopus`;
+export async function recognizeSpeech(oggBuffer: Buffer): Promise<string> {
+  const apiKey = process.env.YANDEX_CLOUD_API_KEY;
+  const folderId = process.env.YANDEX_CLOUD_FOLDER_ID;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Authorization": `Api-Key ${env.YANDEX_CLOUD_API_KEY}`,
-      "Content-Type": "audio/ogg",
-    },
-    body: new Uint8Array(audioBuffer),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Yandex SpeechKit API error (${response.status}): ${errorText}`);
+  if (!apiKey || !folderId) {
+    console.log("[SpeechKit] API key or folder ID not configured, skipping");
+    return "";
   }
 
-  const data = await response.json() as any;
-  
-  if (data.error_code) {
-    throw new Error(`Yandex SpeechKit error: ${data.error_message}`);
-  }
+  try {
+    console.log("[SpeechKit] Recognizing audio, size:", oggBuffer.length, "bytes");
 
-  return data.result || "";
+    const response = await fetch(
+      `https://stt.api.cloud.yandex.net/speech/v1/stt:recognize?folderId=${folderId}&topic=general&lang=ru-RU&format=oggopus`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Api-Key ${apiKey}`,
+          "Content-Type": "application/octet-stream",
+        },
+        body: new Uint8Array(oggBuffer),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("[SpeechKit] Error:", response.status, errorText);
+      return "";
+    }
+
+    const data = (await response.json()) as { result?: string; error_code?: string; error_message?: string };
+
+    if (data.error_code) {
+      console.error("[SpeechKit] API error:", data.error_message);
+      return "";
+    }
+
+    const text = data.result || "";
+    console.log("[SpeechKit] Recognized:", text.substring(0, 100));
+    return text;
+  } catch (e) {
+    console.error("[SpeechKit] Recognition failed:", e);
+    return "";
+  }
 }

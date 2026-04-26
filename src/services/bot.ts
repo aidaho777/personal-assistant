@@ -23,7 +23,6 @@ import {
   formatSize,
 } from "../lib/helpers";
 import { recognizeSpeech } from "./yandex-speechkit";
-import { extractTask } from "./task-extractor";
 import type { User } from "../db/schema";
 import postgres from "postgres";
 
@@ -33,6 +32,91 @@ function getTaskDb() {
   const url = process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
   if (!url) throw new Error("No DATABASE_URL or DATABASE_PUBLIC_URL");
   return postgres(url, { max: 3, idle_timeout: 20, connect_timeout: 10 });
+}
+
+const TASK_KEYWORDS_REGEX = /^(новая\s+)?задача|^зафиксируй|^запиши\s+задачу|^напомни|^запланируй|^нужно|^не забыть|^todo/i;
+
+/**
+ * If `text` looks like a task command, parse it and INSERT into tasks table.
+ * Returns { created, title, dueDate } so the caller can format the reply.
+ */
+async function tryCreateTaskFromText(text: string, userId: string): Promise<{ created: boolean; title?: string; dueDate?: string | null }> {
+  if (!TASK_KEYWORDS_REGEX.test(text)) return { created: false };
+
+  let taskTitle = text
+    .replace(/^(?:новая\s+)?задача\s*[-–:\s]*/i, "")
+    .replace(/^зафиксируй\s*(?:задачу\s*)?[-–:\s]*/i, "")
+    .replace(/^запиши\s+задачу\s*[-–:\s]*/i, "")
+    .replace(/^напомни\s*[-–:\s]*/i, "")
+    .replace(/^запланируй\s*[-–:\s]*/i, "")
+    .replace(/^нужно\s*[-–:\s]*/i, "")
+    .replace(/^не забыть\s*[-–:\s]*/i, "")
+    .replace(/^todo\s*[-–:\s]*/i, "")
+    .trim();
+
+  if (!taskTitle) taskTitle = text;
+
+  let dueDate: string | null = null;
+
+  if (/на завтра/i.test(taskTitle)) {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(9, 0, 0, 0);
+    dueDate = d.toISOString();
+    taskTitle = taskTitle.replace(/на завтра\s*/i, "").replace(/^\s*[-–]\s*/, "").trim();
+  }
+
+  const dayMatch = taskTitle.match(/(?:в |во )(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)/i);
+  if (!dueDate && dayMatch) {
+    const days: Record<string, number> = { "воскресенье": 0, "понедельник": 1, "вторник": 2, "среду": 3, "четверг": 4, "пятницу": 5, "субботу": 6 };
+    const target = days[dayMatch[1].toLowerCase()];
+    if (target !== undefined) {
+      const d = new Date();
+      let diff = target - d.getDay();
+      if (diff <= 0) diff += 7;
+      d.setDate(d.getDate() + diff);
+      d.setHours(9, 0, 0, 0);
+      dueDate = d.toISOString();
+    }
+    taskTitle = taskTitle.replace(dayMatch[0], "").trim();
+  }
+
+  const timeMatch = taskTitle.match(/в\s*(\d{1,2})[:\-](\d{2})/);
+  if (timeMatch) {
+    const d = dueDate ? new Date(dueDate) : new Date();
+    if (!dueDate) d.setDate(d.getDate() + 1);
+    d.setHours(parseInt(timeMatch[1]), parseInt(timeMatch[2]), 0, 0);
+    dueDate = d.toISOString();
+    taskTitle = taskTitle.replace(timeMatch[0], "").trim();
+  }
+
+  taskTitle = taskTitle.replace(/^\s*[-–]\s*/, "").replace(/\s*[-–]\s*$/, "").trim();
+  if (!taskTitle) taskTitle = text;
+
+  console.log("[Bot] Creating task:", taskTitle, "due:", dueDate);
+
+  const sql = getTaskDb();
+  try {
+    await sql`
+      INSERT INTO tasks (id, user_id, title, status, priority, source, due_date, created_at, updated_at)
+      VALUES (gen_random_uuid(), ${userId}, ${taskTitle}, 'todo', 'medium', 'telegram', ${dueDate}, NOW(), NOW())
+    `;
+  } finally {
+    await sql.end().catch(() => {});
+  }
+
+  return { created: true, title: taskTitle, dueDate };
+}
+
+function formatTaskReply(title: string, dueDate: string | null | undefined, prefix?: string): string {
+  let reply = prefix ? `${prefix}\n` : "";
+  reply += `✅ Задача создана: "${title}"`;
+  if (dueDate) {
+    const d = new Date(dueDate);
+    reply += `\n📅 ${d.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" })}`;
+  }
+  reply += `\n📋 Список задач: /tasks`;
+  return reply;
 }
 
 // ─── Bot singleton ──────────────────────────────────────────────────────
@@ -264,81 +348,14 @@ function registerHandlers(bot: Telegraf) {
     if (text.startsWith("/")) return;
 
     // ── Check if message is a task ──
-    const taskKeywords = /^(новая\s+)?задача|^зафиксируй|^запиши\s+задачу|^напомни|^запланируй|^нужно|^не забыть|^todo/i;
-
-    if (taskKeywords.test(text)) {
-      try {
-        let taskTitle = text
-          .replace(/^(?:новая\s+)?задача\s*[-–:\s]*/i, "")
-          .replace(/^зафиксируй\s*(?:задачу\s*)?[-–:\s]*/i, "")
-          .replace(/^запиши\s+задачу\s*[-–:\s]*/i, "")
-          .replace(/^напомни\s*[-–:\s]*/i, "")
-          .replace(/^запланируй\s*[-–:\s]*/i, "")
-          .replace(/^нужно\s*[-–:\s]*/i, "")
-          .replace(/^не забыть\s*[-–:\s]*/i, "")
-          .replace(/^todo\s*[-–:\s]*/i, "")
-          .trim();
-
-        if (!taskTitle) taskTitle = text;
-
-        let dueDate: string | null = null;
-
-        if (/на завтра/i.test(taskTitle)) {
-          const d = new Date();
-          d.setDate(d.getDate() + 1);
-          d.setHours(9, 0, 0, 0);
-          dueDate = d.toISOString();
-          taskTitle = taskTitle.replace(/на завтра\s*/i, "").replace(/^\s*[-–]\s*/, "").trim();
-        }
-
-        const dayMatch = taskTitle.match(/(?:в |во )(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)/i);
-        if (!dueDate && dayMatch) {
-          const days: Record<string, number> = { "воскресенье": 0, "понедельник": 1, "вторник": 2, "среду": 3, "четверг": 4, "пятницу": 5, "субботу": 6 };
-          const target = days[dayMatch[1].toLowerCase()];
-          if (target !== undefined) {
-            const d = new Date();
-            let diff = target - d.getDay();
-            if (diff <= 0) diff += 7;
-            d.setDate(d.getDate() + diff);
-            d.setHours(9, 0, 0, 0);
-            dueDate = d.toISOString();
-          }
-          taskTitle = taskTitle.replace(dayMatch[0], "").trim();
-        }
-
-        const timeMatch = taskTitle.match(/в\s*(\d{1,2})[:\-](\d{2})/);
-        if (timeMatch) {
-          const d = dueDate ? new Date(dueDate) : new Date();
-          if (!dueDate) d.setDate(d.getDate() + 1);
-          d.setHours(parseInt(timeMatch[1]), parseInt(timeMatch[2]), 0, 0);
-          dueDate = d.toISOString();
-          taskTitle = taskTitle.replace(timeMatch[0], "").trim();
-        }
-
-        taskTitle = taskTitle.replace(/^\s*[-–]\s*/, "").replace(/\s*[-–]\s*$/, "").trim();
-        if (!taskTitle) taskTitle = text;
-
-        console.log("[Bot] Creating task:", taskTitle, "due:", dueDate);
-
-        const sql = getTaskDb();
-        await sql`
-          INSERT INTO tasks (id, user_id, title, status, priority, source, due_date, created_at, updated_at)
-          VALUES (gen_random_uuid(), ${user.id}, ${taskTitle}, 'todo', 'medium', 'telegram', ${dueDate}, NOW(), NOW())
-        `;
-        await sql.end();
-
-        let reply = `✅ Задача создана: "${taskTitle}"`;
-        if (dueDate) {
-          const d = new Date(dueDate);
-          reply += `\n📅 ${d.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" })}`;
-        }
-        reply += `\n📋 Список задач: /tasks`;
-
-        await ctx.reply(reply);
+    try {
+      const result = await tryCreateTaskFromText(text, user.id);
+      if (result.created && result.title) {
+        await ctx.reply(formatTaskReply(result.title, result.dueDate));
         return; // EXIT — do not save as note
-      } catch (e) {
-        console.error("[Bot] Task creation error:", e);
       }
+    } catch (e) {
+      console.error("[Bot] Task creation error:", e);
     }
     // ── End task check ──
 
@@ -466,27 +483,24 @@ async function processFile(ctx: Context, user: User, input: FileInput) {
           console.error("[Collector] Error uploading transcription:", uploadErr);
         }
 
-        // Task detection from transcription (LLM-based)
+        // Task detection from transcription (regex-based, same as text)
         try {
-          const taskResult = await extractTask(transcriptionText);
-          if (taskResult.isTask && taskResult.title) {
-            const dueDateStr = taskResult.dueDate ? new Date(taskResult.dueDate).toISOString() : null;
-            const sql = getTaskDb();
-            await sql`
-              INSERT INTO tasks (id, user_id, title, status, priority, source, due_date, created_at, updated_at)
-              VALUES (gen_random_uuid(), ${user.id}, ${taskResult.title}, 'todo', 'medium', 'telegram', ${dueDateStr}, NOW(), NOW())
-            `;
-            await sql.end();
-            let reply = `✅ Задача создана: "${taskResult.title}"`;
-            if (dueDateStr) {
-              const d = new Date(dueDateStr);
-              reply += `\n📅 ${d.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" })}`;
-            }
-            reply += `\n📋 Список задач: /tasks`;
-            await ctx.reply(reply);
+          const taskResult = await tryCreateTaskFromText(transcriptionText, user.id);
+          if (taskResult.created && taskResult.title) {
+            await updateUploadRecord(record.id, {
+              driveFileId: result.fileId,
+              driveFolderId: result.folderId,
+              driveUrl: result.webViewLink,
+              fileMd5: hash,
+              transcription: transcriptionText,
+              status: "success",
+            });
+            const preview = transcriptionText.length > 200 ? transcriptionText.substring(0, 200) + "..." : transcriptionText;
+            await ctx.reply(formatTaskReply(taskResult.title, taskResult.dueDate, `🎤 Распознано: "${preview}"`));
+            return; // EXIT — task created, don't send the file-saved reply
           }
         } catch (taskErr) {
-          console.error("[Collector] Voice task extraction error:", taskErr);
+          console.error("[Collector] Voice task creation error:", taskErr);
         }
       }
     }
