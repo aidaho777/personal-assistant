@@ -9,7 +9,7 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+  const clientId = process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || process.env.AUTH_GOOGLE_ID;
   if (!clientId) {
     return NextResponse.json({ error: "Google OAuth not configured" }, { status: 500 });
   }
