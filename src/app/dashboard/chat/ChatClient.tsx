@@ -7,6 +7,7 @@ interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  sourceFiles?: string[];
 }
 
 interface RagStats {
@@ -30,6 +31,8 @@ export default function ChatClient() {
   const [showDocs, setShowDocs] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const [reindexResult, setReindexResult] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -75,6 +78,7 @@ export default function ChatClient() {
         answer?: string;
         error?: string;
         message?: string;
+        sourceFiles?: string[];
       };
 
       if (!res.ok) {
@@ -94,6 +98,7 @@ export default function ChatClient() {
             id: Date.now().toString(),
             role: "assistant",
             content: data.answer ?? "",
+            sourceFiles: data.sourceFiles,
           },
         ]);
       }
@@ -154,6 +159,25 @@ export default function ChatClient() {
       setReindexResult("❌ Не удалось выполнить переиндексацию");
     } finally {
       setReindexing(false);
+    }
+  }
+
+  async function handleSyncDrive() {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const res = await fetch("/api/rag/sync-drive", { method: "POST" });
+      const data = (await res.json()) as { synced?: number; total?: number; skipped?: number; errors?: number; error?: string };
+      if (res.ok) {
+        setSyncResult(`✅ Синхронизировано: ${data.synced} из ${data.total} (пропущено: ${data.skipped}, ошибок: ${data.errors})`);
+        refreshStats();
+      } else {
+        setSyncResult(`❌ ${data.error ?? "Ошибка синхронизации"}`);
+      }
+    } catch {
+      setSyncResult("❌ Не удалось синхронизировать");
+    } finally {
+      setSyncing(false);
     }
   }
 
@@ -246,6 +270,13 @@ export default function ChatClient() {
           >
             {reindexing ? "OCR..." : "🔍 Переиндексация"}
           </button>
+          <button
+            onClick={handleSyncDrive}
+            disabled={syncing}
+            className="text-xs px-3 py-1 rounded-lg bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white font-medium"
+          >
+            {syncing ? "Синхронизация..." : "☁️ Google Drive"}
+          </button>
         </div>
       </div>
 
@@ -303,6 +334,12 @@ export default function ChatClient() {
         </div>
       )}
 
+      {syncResult && (
+        <div className="text-sm px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-200">
+          {syncResult}
+        </div>
+      )}
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto flex flex-col gap-3 min-h-0">
         {messages.length === 0 && (
@@ -329,6 +366,15 @@ export default function ChatClient() {
               }`}
             >
               {msg.content}
+              {msg.sourceFiles && msg.sourceFiles.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-600 flex flex-wrap gap-1">
+                  {msg.sourceFiles.map((f) => (
+                    <span key={f} className="text-[11px] px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-600 text-slate-600 dark:text-slate-300">
+                      📎 {f}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ))}
