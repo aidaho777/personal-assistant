@@ -8,6 +8,8 @@ import { authConfig } from "./auth.config";
 
 const { webUsers } = schema;
 
+console.log("[Auth] Google clientId length:", (process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || process.env.AUTH_GOOGLE_ID || "").length);
+
 export const { auth, handlers, signIn, signOut } = NextAuth({
   ...authConfig,
   providers: [
@@ -47,8 +49,8 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
       },
     }),
     Google({
-      clientId: process.env.GOOGLE_OAUTH_CLIENT_ID ?? "",
-      clientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? "",
+      clientId: process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || process.env.AUTH_GOOGLE_ID || "",
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET || process.env.AUTH_GOOGLE_SECRET || "",
     }),
   ],
   callbacks: {
