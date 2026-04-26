@@ -44,7 +44,14 @@ async function getOwnerIds(sql: ReturnType<typeof postgres>, webUserId: string):
   try {
     const rows = await sql`SELECT telegram_user_id FROM web_users WHERE id = ${webUserId}::uuid`;
     const tgId = rows[0]?.telegram_user_id as string | undefined;
-    if (tgId) ids.push(tgId);
+    if (tgId && !ids.includes(tgId)) ids.push(tgId);
+  } catch { /* ignore */ }
+  try {
+    const rows = await sql`SELECT id FROM users`;
+    for (const r of rows) {
+      const uid = r.id as string;
+      if (uid && !ids.includes(uid)) ids.push(uid);
+    }
   } catch { /* ignore */ }
   return ids;
 }
