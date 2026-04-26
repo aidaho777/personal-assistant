@@ -26,6 +26,17 @@ async function ensureTable(sql: ReturnType<typeof postgres>) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
+  // Migrate old schema columns if they exist
+  try { await sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority VARCHAR(16) NOT NULL DEFAULT 'medium'`; } catch { /* ignore */ }
+  try { await sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS description TEXT`; } catch { /* ignore */ }
+  try { await sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source VARCHAR(16) NOT NULL DEFAULT 'web'`; } catch { /* ignore */ }
+  try { await sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS raw_message TEXT`; } catch { /* ignore */ }
+  try { await sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`; } catch { /* ignore */ }
+  try { await sql`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'todo'`; } catch { /* ignore */ }
+  // Drop old columns that no longer exist in schema
+  try { await sql`ALTER TABLE tasks DROP COLUMN IF EXISTS web_user_id`; } catch { /* ignore */ }
+  try { await sql`ALTER TABLE tasks DROP COLUMN IF EXISTS is_completed`; } catch { /* ignore */ }
+  try { await sql`ALTER TABLE tasks DROP COLUMN IF EXISTS category`; } catch { /* ignore */ }
 }
 
 async function getOwnerIds(sql: ReturnType<typeof postgres>, webUserId: string): Promise<string[]> {

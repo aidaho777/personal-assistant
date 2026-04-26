@@ -167,7 +167,7 @@ function registerHandlers(bot: Telegraf) {
     const user = (ctx as unknown as AuthContext).dbUser;
     try {
       const rows = await db
-        .select()
+        .select({ id: schema.tasks.id, title: schema.tasks.title, dueDate: schema.tasks.dueDate })
         .from(schema.tasks)
         .where(and(eq(schema.tasks.userId, user.id), eq(schema.tasks.status, "todo")))
         .orderBy(schema.tasks.dueDate)
