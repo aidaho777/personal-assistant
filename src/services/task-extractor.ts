@@ -1,50 +1,61 @@
-import { fetchWithRetry } from "@/lib/fetch-with-retry";
+import OpenAI from "openai";
 
-interface TaskExtraction {
+interface TaskExtractionResult {
   isTask: boolean;
-  title?: string;
-  description?: string;
-  dueDate?: string;
+  title: string | null;
+  dueDate: string | null;
 }
 
-export async function extractTask(text: string): Promise<TaskExtraction> {
+export async function extractTask(text: string): Promise<TaskExtractionResult> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return { isTask: false };
+  if (!apiKey) return { isTask: false, title: null, dueDate: null };
 
+  const openai = new OpenAI({ apiKey, maxRetries: 3 });
   const today = new Date().toISOString();
 
   try {
-    const res = await fetchWithRetry("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: `Ты анализируешь сообщения пользователя. Если сообщение похоже на задачу (что-то нужно сделать, купить, позвонить, напомнить и т.д.), верни JSON:
-{"isTask": true, "title": "краткая суть задачи (до 60 символов)", "description": "детали если есть", "dueDate": "ISO-дата"}
-Если дата не указана явно, но есть слова "завтра", "послезавтра", "в пятницу", "через неделю" — вычисли дату относительно сегодня: ${today}.
-Если дата вообще не упомянута — поставь сегодняшнюю дату.
-Если это НЕ задача (просто заметка, мысль, цитата) — верни {"isTask": false}.
-Отвечай ТОЛЬКО валидным JSON, без markdown.`,
-          },
-          { role: "user", content: text },
-        ],
-        temperature: 0.1,
-        max_tokens: 200,
-      }),
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content: `Ты — классификатор сообщений. Определи, содержит ли сообщение задачу, которую пользователь должен выполнить.
+
+Задачей считается ЛЮБОЕ сообщение, где:
+- Есть действие, которое нужно совершить (позвонить, купить, сдать, отправить, написать, сделать, подготовить, оплатить, забрать, встретиться, записаться, проверить, починить, убрать, заказать...)
+- Есть слова-маркеры обязательства: "нужно", "надо", "должен", "не забыть", "напомни", "планирую", "хочу", "собираюсь"
+- Есть упоминание дедлайна или времени: "завтра", "сегодня", "в пятницу", "до конца недели", "вечером", "утром", "через час", "на следующей неделе", "до 15 числа"
+- Есть контекст обязательства перед кем-то: "сдать работу", "отправить отчёт", "ответить клиенту"
+
+НЕ задачей считается:
+- Абстрактная мысль или наблюдение ("красивый закат сегодня")
+- Идея без конкретного действия ("было бы круто сделать приложение")
+- Цитата, ссылка, пересланное сообщение без контекста действия
+- Вопрос без обязательства ("как дела?")
+
+Правила для даты:
+- Сегодняшняя дата и время: ${today}
+- "завтра" = текущая дата + 1 день
+- "послезавтра" = текущая дата + 2 дня
+- "в пятницу" = ближайшая пятница (если сегодня пятница — следующая)
+- "вечером" = 20:00, "утром" = 09:00, "днём" = 14:00
+- "на следующей неделе" = понедельник следующей недели
+- Если дата не указана и не подразумевается — dueDate: null
+
+Верни строго JSON: {"isTask": boolean, "title": string | null, "dueDate": string | null}
+Где dueDate — ISO-8601 формат или null.`,
+        },
+        { role: "user", content: text },
+      ],
     });
 
-    const data = (await res.json()) as { choices: { message: { content: string } }[] };
-    const raw = data.choices[0].message.content.trim();
-    const parsed = JSON.parse(raw) as TaskExtraction;
-    return parsed;
+    const content = response.choices[0]?.message?.content;
+    if (!content) return { isTask: false, title: null, dueDate: null };
+    return JSON.parse(content) as TaskExtractionResult;
   } catch (e) {
     console.error("[TaskExtractor] Failed:", e);
-    return { isTask: false };
+    return { isTask: false, title: null, dueDate: null };
   }
 }

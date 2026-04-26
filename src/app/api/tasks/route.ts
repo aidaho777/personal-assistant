@@ -15,15 +15,27 @@ async function ensureTable(sql: ReturnType<typeof postgres>) {
     CREATE TABLE IF NOT EXISTS tasks (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id UUID NOT NULL,
+      web_user_id UUID,
       title TEXT NOT NULL,
-      description TEXT,
-      status VARCHAR(16) NOT NULL DEFAULT 'todo',
-      category VARCHAR(16) NOT NULL DEFAULT 'task',
-      due_date TIMESTAMPTZ DEFAULT NOW(),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      raw_message TEXT,
+      due_date TIMESTAMPTZ,
+      is_completed BOOLEAN NOT NULL DEFAULT false,
+      source VARCHAR(16) NOT NULL DEFAULT 'web',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
+}
+
+async function getTaskUserIds(sql: ReturnType<typeof postgres>, webUserId: string): Promise<string[]> {
+  const ids = [webUserId];
+  try {
+    const rows = await sql`
+      SELECT telegram_user_id FROM web_users WHERE id = ${webUserId}::uuid
+    `;
+    const tgId = rows[0]?.telegram_user_id as string | undefined;
+    if (tgId) ids.push(tgId);
+  } catch { /* ignore */ }
+  return ids;
 }
 
 export async function GET(req: NextRequest) {
@@ -32,40 +44,32 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const userId = session.user.id;
   const sql = getDb();
 
   try {
     await ensureTable(sql);
-
-    const filter = req.nextUrl.searchParams.get("filter") ?? "all";
+    const userIds = await getTaskUserIds(sql, session.user.id);
+    const showCompleted = req.nextUrl.searchParams.get("completed") === "true";
 
     let rows;
-    if (filter === "today") {
+    if (showCompleted) {
       rows = await sql`
         SELECT * FROM tasks
-        WHERE user_id = ${userId}::uuid
-          AND status NOT IN ('done', 'cancelled')
-          AND due_date::date = CURRENT_DATE
-        ORDER BY created_at DESC
-      `;
-    } else if (filter === "future") {
-      rows = await sql`
-        SELECT * FROM tasks
-        WHERE user_id = ${userId}::uuid
-          AND status NOT IN ('done', 'cancelled')
-          AND due_date > CURRENT_DATE
-        ORDER BY due_date ASC NULLS LAST
+        WHERE (user_id = ANY(${userIds}::uuid[]) OR web_user_id = ${session.user.id}::uuid)
+        ORDER BY due_date ASC NULLS LAST, created_at DESC
       `;
     } else {
       rows = await sql`
         SELECT * FROM tasks
-        WHERE user_id = ${userId}::uuid
-        ORDER BY due_date ASC NULLS LAST, created_at DESC
+        WHERE (user_id = ANY(${userIds}::uuid[]) OR web_user_id = ${session.user.id}::uuid)
+          AND is_completed = false
+        ORDER BY
+          CASE WHEN due_date IS NOT NULL AND due_date < NOW() THEN 0 ELSE 1 END,
+          due_date ASC NULLS LAST,
+          created_at DESC
       `;
     }
 
-    console.log("[Tasks] GET:", userId, "filter:", filter, "count:", rows.length);
     await sql.end();
     return NextResponse.json({ tasks: rows });
   } catch (error) {
@@ -81,48 +85,36 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const userId = session.user.id;
   const sql = getDb();
 
   try {
     await ensureTable(sql);
 
-    const body = (await req.json()) as {
-      title: string;
-      description?: string;
-      dueDate?: string;
-      category?: string;
-    };
-
+    const body = (await req.json()) as { title: string; dueDate?: string };
     if (!body.title?.trim()) {
       await sql.end();
       return NextResponse.json({ error: "Title is required" }, { status: 400 });
     }
 
-    const dueDate = body.dueDate && body.dueDate.trim()
-      ? new Date(body.dueDate).toISOString()
-      : null;
+    const dueDate = body.dueDate && body.dueDate.trim() ? new Date(body.dueDate).toISOString() : null;
 
     const rows = await sql`
-      INSERT INTO tasks (user_id, title, description, status, category, due_date)
+      INSERT INTO tasks (web_user_id, user_id, title, due_date, source)
       VALUES (
-        ${userId}::uuid,
+        ${session.user.id}::uuid,
+        ${session.user.id}::uuid,
         ${body.title.trim()},
-        ${body.description?.trim() ?? null},
-        'todo',
-        ${body.category ?? "task"},
-        ${dueDate}::timestamptz
+        ${dueDate}::timestamptz,
+        'web'
       )
       RETURNING *
     `;
-
-    console.log("[Tasks] Created:", rows[0]?.id, body.title.trim());
 
     await sql.end();
     return NextResponse.json({ task: rows[0] });
   } catch (error) {
     await sql.end().catch(() => {});
-    console.error("Tasks POST error:", error);
+    console.error("[Tasks] POST error:", error);
     return NextResponse.json({ error: "Failed to create task" }, { status: 500 });
   }
 }
@@ -133,52 +125,32 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const userId = session.user.id;
   const sql = getDb();
 
   try {
-    const body = (await req.json()) as {
-      id: string;
-      title?: string;
-      description?: string;
-      status?: string;
-      dueDate?: string;
-      category?: string;
-    };
-
+    const body = (await req.json()) as { id: string; isCompleted: boolean };
     if (!body.id) {
       await sql.end();
       return NextResponse.json({ error: "id is required" }, { status: 400 });
     }
 
-    const validStatuses = ["todo", "in_progress", "done", "cancelled"];
-    if (body.status && !validStatuses.includes(body.status)) {
-      await sql.end();
-      return NextResponse.json({ error: "Invalid status" }, { status: 400 });
-    }
+    const userIds = await getTaskUserIds(sql, session.user.id);
 
     const rows = await sql`
-      UPDATE tasks SET
-        title = COALESCE(${body.title ?? null}, title),
-        description = CASE WHEN ${body.description !== undefined} THEN ${body.description ?? null} ELSE description END,
-        status = COALESCE(${body.status ?? null}, status),
-        category = COALESCE(${body.category ?? null}, category),
-        due_date = CASE WHEN ${body.dueDate !== undefined} THEN ${body.dueDate ? new Date(body.dueDate).toISOString() : null}::timestamptz ELSE due_date END,
-        updated_at = NOW()
-      WHERE id = ${body.id}::uuid AND user_id = ${userId}::uuid
+      UPDATE tasks SET is_completed = ${body.isCompleted}
+      WHERE id = ${body.id}::uuid
+        AND (user_id = ANY(${userIds}::uuid[]) OR web_user_id = ${session.user.id}::uuid)
       RETURNING *
     `;
 
     await sql.end();
-
     if (rows.length === 0) {
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
-
     return NextResponse.json({ task: rows[0] });
   } catch (error) {
     await sql.end().catch(() => {});
-    console.error("Tasks PATCH error:", error);
+    console.error("[Tasks] PATCH error:", error);
     return NextResponse.json({ error: "Failed to update task" }, { status: 500 });
   }
 }
@@ -189,7 +161,6 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const userId = session.user.id;
   const sql = getDb();
 
   try {
@@ -199,15 +170,19 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "id is required" }, { status: 400 });
     }
 
+    const userIds = await getTaskUserIds(sql, session.user.id);
+
     await sql`
-      DELETE FROM tasks WHERE id = ${id}::uuid AND user_id = ${userId}::uuid
+      DELETE FROM tasks
+      WHERE id = ${id}::uuid
+        AND (user_id = ANY(${userIds}::uuid[]) OR web_user_id = ${session.user.id}::uuid)
     `;
 
     await sql.end();
     return NextResponse.json({ success: true });
   } catch (error) {
     await sql.end().catch(() => {});
-    console.error("Tasks DELETE error:", error);
+    console.error("[Tasks] DELETE error:", error);
     return NextResponse.json({ error: "Failed to delete task" }, { status: 500 });
   }
 }

@@ -25,17 +25,7 @@ import {
 import { recognizeSpeech } from "./yandex-speechkit";
 import { extractTask } from "./task-extractor";
 import { db, schema } from "../db";
-import { eq } from "drizzle-orm";
 import type { User } from "../db/schema";
-
-async function getTaskUserId(telegramUserId: string): Promise<string> {
-  const rows = await db
-    .select({ id: schema.webUsers.id })
-    .from(schema.webUsers)
-    .where(eq(schema.webUsers.telegramUserId, telegramUserId))
-    .limit(1);
-  return rows[0]?.id ?? telegramUserId;
-}
 
 // ─── Bot singleton ──────────────────────────────────────────────────────
 
@@ -222,14 +212,35 @@ function registerHandlers(bot: Telegraf) {
     });
   });
 
-  // Text messages (notes)
+  // Text messages (notes or tasks)
   bot.on(message("text"), async (ctx) => {
     const user = (ctx as unknown as AuthContext).dbUser;
     const text = ctx.message.text;
 
-    // Skip if it starts with / (handled by commands above)
     if (text.startsWith("/")) return;
 
+    // Check if this is a task BEFORE saving as note
+    try {
+      const taskResult = await extractTask(text);
+      if (taskResult.isTask && taskResult.title) {
+        await db.insert(schema.tasks).values({
+          userId: user.id,
+          title: taskResult.title,
+          rawMessage: text,
+          dueDate: taskResult.dueDate ? new Date(taskResult.dueDate) : null,
+          source: "telegram",
+        });
+        const dateStr = taskResult.dueDate
+          ? new Date(taskResult.dueDate).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
+          : "без даты";
+        await ctx.reply(`✅ Задача добавлена: ${taskResult.title}\n📅 ${dateStr}`);
+        return;
+      }
+    } catch (taskErr) {
+      console.error("[Collector] Task extraction error:", taskErr);
+    }
+
+    // Not a task — save as note
     const tag = extractTag(text);
     const fileName = buildFileName("text", `note_${Date.now()}.txt`);
     const buffer = Buffer.from(text, "utf-8");
@@ -249,7 +260,6 @@ function registerHandlers(bot: Telegraf) {
       const folderId = await getOrCreateFolder(tag);
       const hash = md5(buffer);
 
-      // Dedup check
       const dup = await findDuplicateByMd5(user.id, hash);
       if (dup) {
         await ctx.reply(
@@ -274,27 +284,6 @@ function registerHandlers(bot: Telegraf) {
         `✅ Заметка сохранена в папку \`${tag}\`\n🔗 [Открыть в Drive](${result.webViewLink})`,
         { parse_mode: "Markdown", link_preview_options: { is_disabled: true } }
       );
-
-      try {
-        const taskResult = await extractTask(text);
-        if (taskResult.isTask && taskResult.title) {
-          const taskUserId = await getTaskUserId(user.id);
-          await db.insert(schema.tasks).values({
-            userId: taskUserId,
-            title: taskResult.title,
-            description: taskResult.description ?? null,
-            dueDate: taskResult.dueDate ? new Date(taskResult.dueDate) : new Date(),
-            status: "todo",
-            category: "task",
-          });
-          const dateStr = taskResult.dueDate
-            ? new Date(taskResult.dueDate).toLocaleDateString("ru-RU")
-            : "сегодня";
-          await ctx.reply(`📌 Задача добавлена: "${taskResult.title}" на ${dateStr}`);
-        }
-      } catch (taskErr) {
-        console.error("[Collector] Task extraction error:", taskErr);
-      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : "Unknown error";
       await updateUploadRecord(record.id, { status: "error", errorMessage: errMsg });
@@ -379,19 +368,17 @@ async function processFile(ctx: Context, user: User, input: FileInput) {
           const taskResult = await extractTask(transcriptionText);
           if (taskResult.isTask && taskResult.title) {
             const user = (ctx as unknown as AuthContext).dbUser;
-            const taskUserId = await getTaskUserId(user.id);
             await db.insert(schema.tasks).values({
-              userId: taskUserId,
+              userId: user.id,
               title: taskResult.title,
-              description: taskResult.description ?? null,
-              dueDate: taskResult.dueDate ? new Date(taskResult.dueDate) : new Date(),
-              status: "todo",
-              category: "task",
+              rawMessage: transcriptionText,
+              dueDate: taskResult.dueDate ? new Date(taskResult.dueDate) : null,
+              source: "telegram",
             });
             const dateStr = taskResult.dueDate
-              ? new Date(taskResult.dueDate).toLocaleDateString("ru-RU")
-              : "сегодня";
-            await ctx.reply(`📌 Задача добавлена: "${taskResult.title}" на ${dateStr}`);
+              ? new Date(taskResult.dueDate).toLocaleString("ru-RU", { day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })
+              : "без даты";
+            await ctx.reply(`✅ Задача добавлена: ${taskResult.title}\n📅 ${dateStr}`);
           }
         } catch (taskErr) {
           console.error("[Collector] Voice task extraction error:", taskErr);
