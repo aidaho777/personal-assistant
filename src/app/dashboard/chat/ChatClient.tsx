@@ -167,9 +167,10 @@ export default function ChatClient() {
     setSyncResult(null);
     try {
       const res = await fetch("/api/rag/sync-drive", { method: "POST" });
-      const data = (await res.json()) as { synced?: number; total?: number; skipped?: number; errors?: number; error?: string };
+      const data = (await res.json()) as { synced?: number; total?: number; skipped?: number; errors?: number; error?: string; details?: string[] };
       if (res.ok) {
-        setSyncResult(`✅ Синхронизировано: ${data.synced} из ${data.total} (пропущено: ${data.skipped}, ошибок: ${data.errors})`);
+        const detailStr = data.details?.length ? `\n${data.details.join("\n")}` : "";
+        setSyncResult(`✅ Синхронизировано: ${data.synced} из ${data.total} (пропущено: ${data.skipped}, ошибок: ${data.errors})${detailStr}`);
         refreshStats();
       } else {
         setSyncResult(`❌ ${data.error ?? "Ошибка синхронизации"}`);

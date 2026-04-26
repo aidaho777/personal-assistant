@@ -75,53 +75,69 @@ export async function syncDriveDocuments(webUserId: string): Promise<SyncResult>
   const result: SyncResult = { synced: 0, skipped: 0, errors: 0, total: 0, details: [] };
 
   try {
-    const webUserRows = await sql`
-      SELECT telegram_user_id FROM web_users WHERE id = ${webUserId}::uuid
-    `;
-    const telegramUserId = webUserRows[0]?.telegram_user_id as string | undefined;
-
-    if (!telegramUserId) {
-      await sql.end();
-      return { ...result, details: ["No linked Telegram account"] };
-    }
-
+    // Get ALL successful document/text uploads — no user filter (single-user MVP)
     const uploads = await sql`
-      SELECT id, file_name, original_name, drive_file_id, drive_url, tag, content_type
+      SELECT id, user_id, file_name, original_name, drive_file_id, drive_url, tag, content_type
       FROM uploads
-      WHERE user_id = ${telegramUserId}::uuid
-        AND status = 'success'
+      WHERE status = 'success'
         AND content_type IN ('document', 'text')
         AND drive_file_id IS NOT NULL
       ORDER BY created_at DESC
     `;
 
     result.total = uploads.length;
-    console.log("[DriveSync] Found", uploads.length, "uploads for user", telegramUserId);
+    console.log("[DriveSync] Found", uploads.length, "uploads in DB");
+
+    if (uploads.length === 0) {
+      result.details.push("No uploads found in DB with status=success and content_type in (document, text)");
+      await sql.end();
+      return result;
+    }
 
     for (const upload of uploads) {
       const fileName = (upload.original_name ?? upload.file_name) as string;
       const driveFileId = upload.drive_file_id as string;
 
       try {
+        // Skip if already indexed for this web user
         const existing = await sql`
           SELECT COUNT(*)::int as cnt FROM web_document_chunks
           WHERE web_user_id = ${webUserId}::uuid
             AND file_name = ${fileName}
         `;
         if (parseInt(String(existing[0]?.cnt ?? "0"), 10) > 0) {
+          console.log("[DriveSync] Already indexed:", fileName);
           result.skipped++;
           continue;
         }
 
-        console.log("[DriveSync] Downloading:", fileName);
-        const buffer = await downloadFileFromDrive(driveFileId);
+        console.log("[DriveSync] Downloading:", fileName, "driveFileId:", driveFileId);
+        let buffer: Buffer;
+        try {
+          buffer = await downloadFileFromDrive(driveFileId);
+        } catch (dlErr) {
+          console.error("[DriveSync] Download failed:", fileName, dlErr);
+          result.details.push(`${fileName}: download failed — ${String(dlErr)}`);
+          result.errors++;
+          continue;
+        }
 
+        if (!buffer || buffer.length === 0) {
+          result.details.push(`${fileName}: empty download`);
+          result.errors++;
+          continue;
+        }
+
+        console.log("[DriveSync] Downloaded", buffer.length, "bytes, extracting text...");
         const text = await extractTextFromBuffer(buffer, fileName);
+
         if (!text || text.trim().length < 10) {
           result.details.push(`${fileName}: no text extracted`);
           result.errors++;
           continue;
         }
+
+        console.log("[DriveSync] Text length:", text.length, "preview:", text.substring(0, 100));
 
         const chunks = chunkText(text);
         if (chunks.length === 0) {
@@ -148,15 +164,16 @@ export async function syncDriveDocuments(webUserId: string): Promise<SyncResult>
 
         result.synced++;
         result.details.push(`${fileName}: ${chunks.length} chunks`);
-        console.log("[DriveSync] Synced:", fileName, "→", chunks.length, "chunks");
+        console.log("[DriveSync] ✅ Synced:", fileName, "→", chunks.length, "chunks");
       } catch (e) {
-        console.error("[DriveSync] Error with", fileName, e);
+        console.error("[DriveSync] ❌ Error with", fileName, e);
         result.details.push(`${fileName}: ${String(e)}`);
         result.errors++;
       }
     }
 
     await sql.end();
+    console.log("[DriveSync] Done. synced=%d skipped=%d errors=%d total=%d", result.synced, result.skipped, result.errors, result.total);
     return result;
   } catch (error) {
     await sql.end().catch(() => {});
