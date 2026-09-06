@@ -23,116 +23,57 @@ import {
   formatSize,
 } from "../lib/helpers";
 import { recognizeSpeech } from "./yandex-speechkit";
+import { routeMessage, type RoutedTask } from "./message-router";
+import { createTask, findTasks, listProjects, taskUrl, formatTask } from "./todoist";
 import type { User } from "../db/schema";
-import postgres from "postgres";
 
-// ─── Task helpers ───────────────────────────────────────────────────────
+// ─── Todoist helpers ───────────────────────────────────────────────────────
 
-function getTaskDb() {
-  const url = process.env.DATABASE_URL || process.env.DATABASE_PUBLIC_URL;
-  if (!url) throw new Error("No DATABASE_URL or DATABASE_PUBLIC_URL");
-  return postgres(url, { max: 3, idle_timeout: 20, connect_timeout: 10 });
+/** Экранирование для parse_mode: "Markdown" (legacy). */
+function mdEscape(s: string): string {
+  return s.replace(/([_*\[\]`\\])/g, "\\$1");
 }
 
-const TASK_KEYWORDS_REGEX = /задач[уа]|напомни|запланируй|нужно|не забыть|todo|поставь.*задач|запиши.*задач|зафиксируй|добавь.*задач/i;
+interface CreatedTask {
+  id: string;
+  title: string;
+}
 
 /**
- * If `text` looks like a task command, parse it and INSERT into tasks table.
- * Returns { created, title, dueDate } so the caller can format the reply.
- *
- * Handles cases like "Добрый день прошу поставить на завтра задачу приготовить завтрак":
- * date is parsed from the full text first, then everything up to the task
- * keyword is stripped to get the title.
+ * Создаёт задачи в Todoist. Проект: хештег из сообщения, точно совпавший
+ * с именем проекта → этот проект; иначе project_hint от роутера; иначе Inbox.
  */
-async function tryCreateTaskFromText(text: string, userId: string): Promise<{ created: boolean; title?: string; dueDate?: string | null }> {
-  if (!TASK_KEYWORDS_REGEX.test(text)) return { created: false };
-
-  // 1. Parse date from the full text (so we don't lose it when stripping the prefix)
-  let workingText = text;
-  let dueDate: string | null = null;
-
-  if (/послезавтра/i.test(workingText)) {
-    const d = new Date();
-    d.setDate(d.getDate() + 2);
-    d.setHours(9, 0, 0, 0);
-    dueDate = d.toISOString();
-    workingText = workingText.replace(/послезавтра\s*/i, "");
-  } else if (/на завтра|завтра/i.test(workingText)) {
-    const d = new Date();
-    d.setDate(d.getDate() + 1);
-    d.setHours(9, 0, 0, 0);
-    dueDate = d.toISOString();
-    workingText = workingText.replace(/(?:на\s+)?завтра\s*/i, "");
-  } else if (/сегодня/i.test(workingText)) {
-    const d = new Date();
-    d.setHours(d.getHours() + 1, 0, 0, 0);
-    dueDate = d.toISOString();
-    workingText = workingText.replace(/сегодня\s*/i, "");
-  }
-
-  const dayMatch = workingText.match(/(?:в |во )(понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)/i);
-  if (!dueDate && dayMatch) {
-    const days: Record<string, number> = { "воскресенье": 0, "понедельник": 1, "вторник": 2, "среду": 3, "четверг": 4, "пятницу": 5, "субботу": 6 };
-    const target = days[dayMatch[1].toLowerCase()];
-    if (target !== undefined) {
-      const d = new Date();
-      let diff = target - d.getDay();
-      if (diff <= 0) diff += 7;
-      d.setDate(d.getDate() + diff);
-      d.setHours(9, 0, 0, 0);
-      dueDate = d.toISOString();
+async function createTodoistTasks(tasks: RoutedTask[], description: string, tag: string): Promise<CreatedTask[]> {
+  let projects: { id: string; name: string }[] = [];
+  if (tag !== "Inbox" || tasks.some((t) => t.project_hint)) {
+    try {
+      projects = await listProjects();
+    } catch (e) {
+      console.error("[Todoist] listProjects failed:", e);
     }
-    workingText = workingText.replace(dayMatch[0], "");
   }
+  const findProject = (name?: string) =>
+    name ? projects.find((p) => p.name.toLowerCase() === name.toLowerCase())?.id : undefined;
 
-  const timeMatch = workingText.match(/в\s*(\d{1,2})[:\-](\d{2})/);
-  if (timeMatch) {
-    const d = dueDate ? new Date(dueDate) : new Date();
-    if (!dueDate) d.setDate(d.getDate() + 1);
-    d.setHours(parseInt(timeMatch[1]), parseInt(timeMatch[2]), 0, 0);
-    dueDate = d.toISOString();
-    workingText = workingText.replace(timeMatch[0], "");
+  const created: CreatedTask[] = [];
+  for (const t of tasks) {
+    const projectId = findProject(tag !== "Inbox" ? tag : undefined) ?? findProject(t.project_hint);
+    const task = await createTask({
+      content: t.title,
+      description,
+      dueString: t.due_string,
+      priority: t.priority,
+      projectId,
+    });
+    console.log("[Todoist] Created task:", task.id, t.title, t.due_string ?? "(no due)");
+    created.push({ id: task.id, title: t.title });
   }
-
-  // 2. Strip everything up to and including the task keyword (lazy match)
-  let taskTitle = workingText
-    .replace(/^.*?задач[уа]\s*[-–:,\s]*/i, "")
-    .replace(/^.*?напомни(?:те)?\s*[-–:,\s]*/i, "")
-    .replace(/^.*?запланируй(?:те)?\s*[-–:,\s]*/i, "")
-    .replace(/^.*?не\s+забыть\s*[-–:,\s]*/i, "")
-    .replace(/^.*?нужно\s*[-–:,\s]*/i, "")
-    .replace(/^.*?todo\s*[-–:,\s]*/i, "")
-    .replace(/^.*?зафиксируй\s*(?:задачу\s*)?[-–:,\s]*/i, "")
-    .trim();
-
-  // Final cleanup
-  taskTitle = taskTitle.replace(/^\s*[-–:,]\s*/, "").replace(/\s*[-–:,]\s*$/, "").trim();
-  if (!taskTitle) taskTitle = text;
-
-  console.log("[Bot] Creating task:", taskTitle, "due:", dueDate);
-
-  const sql = getTaskDb();
-  try {
-    await sql`
-      INSERT INTO tasks (id, user_id, title, status, priority, source, due_date, created_at, updated_at)
-      VALUES (gen_random_uuid(), ${userId}, ${taskTitle}, 'todo', 'medium', 'telegram', ${dueDate}, NOW(), NOW())
-    `;
-  } finally {
-    await sql.end().catch(() => {});
-  }
-
-  return { created: true, title: taskTitle, dueDate };
+  return created;
 }
 
-function formatTaskReply(title: string, dueDate: string | null | undefined, prefix?: string): string {
-  let reply = prefix ? `${prefix}\n` : "";
-  reply += `✅ Задача создана: "${title}"`;
-  if (dueDate) {
-    const d = new Date(dueDate);
-    reply += `\n📅 ${d.toLocaleDateString("ru-RU", { weekday: "long", day: "numeric", month: "long" })}`;
-  }
-  reply += `\n📋 Список задач: /tasks`;
-  return reply;
+function formatCreatedReply(created: CreatedTask[], prefix?: string): string {
+  const lines = created.map((c) => `✅ [${mdEscape(c.title)}](${taskUrl(c.id)})`);
+  return (prefix ? `${prefix}\n\n` : "") + `📋 *Добавлено в Todoist:*\n${lines.join("\n")}`;
 }
 
 // ─── Bot singleton ──────────────────────────────────────────────────────
@@ -209,8 +150,8 @@ function registerHandlers(bot: Telegraf) {
       `/stats — ваша статистика\n` +
       `/list — последние 5 файлов\n` +
       `/list ИмяТега — файлы по тегу\n` +
-      `/tasks — активные задачи\n` +
-      `/upcoming — задачи на ближайшие 2 дня\n` +
+      `/tasks — задачи на сегодня (Todoist)\n` +
+      `/upcoming — задачи на 2 дня (Todoist)\n` +
       `/status — проверка сервисов`,
       { parse_mode: "Markdown" }
     );
@@ -271,77 +212,35 @@ function registerHandlers(bot: Telegraf) {
     );
   });
 
-  // /tasks command
+  // /tasks — сегодня + просроченные (Todoist)
   bot.command("tasks", async (ctx) => {
-    const user = (ctx as unknown as AuthContext).dbUser;
-    const sql = getTaskDb();
     try {
-      const rows = await sql`
-        SELECT id, title, due_date
-        FROM tasks
-        WHERE user_id = ${user.id}::uuid AND status = 'todo'
-        ORDER BY due_date ASC NULLS LAST
-        LIMIT 10
-      `;
-      await sql.end();
-
-      if (rows.length === 0) {
-        await ctx.reply("📋 У вас нет активных задач.");
+      const tasks = await findTasks("today | overdue");
+      if (tasks.length === 0) {
+        await ctx.reply("📋 На сегодня задач нет.");
         return;
       }
-
-      const lines = rows.map((t, i) => {
-        const due = t.due_date
-          ? ` 📅 ${new Date(t.due_date).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}`
-          : "";
-        return `${i + 1}. ${t.title}${due}`;
-      });
-
-      await ctx.reply(`📋 *Ваши задачи:*\n\n${lines.join("\n")}`, { parse_mode: "Markdown" });
+      const lines = tasks.map((t) => `• ${mdEscape(formatTask(t))}`);
+      await ctx.reply(`📋 *Задачи на сегодня:*\n\n${lines.join("\n")}`, { parse_mode: "Markdown" });
     } catch (e) {
-      await sql.end().catch(() => {});
       console.error("[Bot] /tasks error:", e);
-      await ctx.reply("❌ Ошибка при получении задач.");
+      await ctx.reply("❌ Todoist недоступен. Попробуйте позже.");
     }
   });
 
-  // /upcoming command — tasks for the next 48 hours
+  // /upcoming — ближайшие 2 дня (Todoist)
   bot.command("upcoming", async (ctx) => {
-    const user = (ctx as unknown as AuthContext).dbUser;
-    const sql = getTaskDb();
     try {
-      const rows = await sql`
-        SELECT title, due_date, status FROM tasks
-        WHERE user_id = ${user.id}::uuid
-          AND status IN ('todo', 'in_progress')
-          AND due_date IS NOT NULL
-          AND due_date < NOW() + INTERVAL '48 hours'
-        ORDER BY due_date ASC
-        LIMIT 10
-      `;
-      await sql.end();
-
-      if (rows.length === 0) {
+      const tasks = await findTasks("2 days");
+      if (tasks.length === 0) {
         await ctx.reply("📋 Нет задач на ближайшие 2 дня.");
         return;
       }
-
-      const now = new Date();
-      const todayStr = now.toDateString();
-      const lines = rows.map((t) => {
-        const d = new Date(t.due_date as string);
-        const isPast = d < now;
-        const isToday = d.toDateString() === todayStr;
-        const prefix = isPast ? "🔴 Просрочено" : isToday ? "🟠 Сегодня" : "🟡 Завтра";
-        const time = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
-        return `${prefix} ${time} — ${t.title}`;
-      });
-
-      await ctx.reply(`📅 *Ближайшие задачи:*\n\n${lines.join("\n")}`, { parse_mode: "Markdown" });
+      const lines = tasks.map((t) => `• ${mdEscape(formatTask(t))}`);
+      await ctx.reply(`📅 *Ближайшие 2 дня:*\n\n${lines.join("\n")}`, { parse_mode: "Markdown" });
     } catch (e) {
-      await sql.end().catch(() => {});
       console.error("[Bot] /upcoming error:", e);
-      await ctx.reply("❌ Ошибка при получении задач.");
+      await ctx.reply("❌ Todoist недоступен. Попробуйте позже.");
     }
   });
 
@@ -405,20 +304,30 @@ function registerHandlers(bot: Telegraf) {
 
     if (text.startsWith("/")) return;
 
-    // ── Check if message is a task ──
+    // ── LLM router: задачи → Todoist, иначе → заметка в Drive ──
+    const tag = extractTag(text);
+    let notePrefix = "";
     try {
-      const result = await tryCreateTaskFromText(text, user.id);
-      if (result.created && result.title) {
-        await ctx.reply(formatTaskReply(result.title, result.dueDate));
-        return; // EXIT — do not save as note
+      const route = await routeMessage(text);
+      if (route.kind === "tasks") {
+        try {
+          const created = await createTodoistTasks(route.tasks, text, tag);
+          await ctx.reply(formatCreatedReply(created), {
+            parse_mode: "Markdown",
+            link_preview_options: { is_disabled: true },
+          });
+          return;
+        } catch (todoistErr) {
+          console.error("[Bot] Todoist create error:", todoistErr);
+          notePrefix = "⚠️ Не смог создать задачу в Todoist, сохранил как заметку.\n";
+        }
       }
-    } catch (e) {
-      console.error("[Bot] Task creation error:", e);
+    } catch (routerErr) {
+      console.error("[Bot] Router error:", routerErr);
+      notePrefix = "⚠️ Не смог разобрать сообщение, сохранил как заметку.\n";
     }
-    // ── End task check ──
 
     // Not a task — save as note
-    const tag = extractTag(text);
     const fileName = buildFileName("text", `note_${Date.now()}.txt`);
     const buffer = Buffer.from(text, "utf-8");
 
@@ -458,7 +367,7 @@ function registerHandlers(bot: Telegraf) {
       });
 
       await ctx.reply(
-        `✅ Заметка сохранена в папку \`${tag}\`\n🔗 [Открыть в Drive](${result.webViewLink})`,
+        `${notePrefix}✅ Заметка сохранена в папку \`${tag}\`\n🔗 [Открыть в Drive](${result.webViewLink})`,
         { parse_mode: "Markdown", link_preview_options: { is_disabled: true } }
       );
     } catch (err) {
@@ -522,6 +431,7 @@ async function processFile(ctx: Context, user: User, input: FileInput) {
     const result = await uploadFileToDrive(buffer, fileName, mimeType, folderId);
 
     let transcriptionText = "";
+    let voiceNotice = "";
     if (input.contentType === "voice") {
       try {
         transcriptionText = await recognizeSpeech(buffer);
@@ -541,24 +451,38 @@ async function processFile(ctx: Context, user: User, input: FileInput) {
           console.error("[Collector] Error uploading transcription:", uploadErr);
         }
 
-        // Task detection from transcription (regex-based, same as text)
+        // LLM router: задачи → Todoist; иначе — обычный ответ о сохранённом файле
         try {
-          const taskResult = await tryCreateTaskFromText(transcriptionText, user.id);
-          if (taskResult.created && taskResult.title) {
-            await updateUploadRecord(record.id, {
-              driveFileId: result.fileId,
-              driveFolderId: result.folderId,
-              driveUrl: result.webViewLink,
-              fileMd5: hash,
-              transcription: transcriptionText,
-              status: "success",
-            });
-            const preview = transcriptionText.length > 200 ? transcriptionText.substring(0, 200) + "..." : transcriptionText;
-            await ctx.reply(formatTaskReply(taskResult.title, taskResult.dueDate, `🎤 Распознано: "${preview}"`));
-            return; // EXIT — task created, don't send the file-saved reply
+          const route = await routeMessage(transcriptionText);
+          if (route.kind === "tasks") {
+            try {
+              const created = await createTodoistTasks(
+                route.tasks,
+                `${transcriptionText}\n\nDrive: ${result.webViewLink}`,
+                tag
+              );
+              await updateUploadRecord(record.id, {
+                driveFileId: result.fileId,
+                driveFolderId: result.folderId,
+                driveUrl: result.webViewLink,
+                fileMd5: hash,
+                transcription: transcriptionText,
+                status: "success",
+              });
+              const preview = transcriptionText.length > 200 ? transcriptionText.substring(0, 200) + "..." : transcriptionText;
+              await ctx.reply(
+                formatCreatedReply(created, `🎤 Распознано: "${mdEscape(preview)}"`),
+                { parse_mode: "Markdown", link_preview_options: { is_disabled: true } }
+              );
+              return;
+            } catch (todoistErr) {
+              console.error("[Collector] Todoist create error:", todoistErr);
+              voiceNotice = "\n\n⚠️ Не смог создать задачу в Todoist, сохранил как заметку.";
+            }
           }
-        } catch (taskErr) {
-          console.error("[Collector] Voice task creation error:", taskErr);
+        } catch (routerErr) {
+          console.error("[Collector] Router error:", routerErr);
+          voiceNotice = "\n\n⚠️ Не смог разобрать расшифровку, сохранил как заметку.";
         }
       }
     }
@@ -583,6 +507,7 @@ async function processFile(ctx: Context, user: User, input: FileInput) {
       } else {
         replyText += `\n\n⚠️ Не удалось распознать речь (аудио длиннее ~30 сек?). Файл сохранён в Drive`;
       }
+      replyText += voiceNotice;
     }
 
     await ctx.reply(replyText, { parse_mode: "Markdown", link_preview_options: { is_disabled: true } });
