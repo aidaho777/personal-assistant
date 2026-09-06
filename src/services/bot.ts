@@ -577,8 +577,12 @@ async function processFile(ctx: Context, user: User, input: FileInput) {
     const sizeStr = input.fileSize > 0 ? ` (${formatSize(input.fileSize)})` : "";
     let replyText = `✅ Файл сохранён в папку \`${tag}\`${sizeStr}\n📄 \`${fileName}\`\n🔗 [Открыть в Drive](${result.webViewLink})`;
     
-    if (input.contentType === "voice" && transcriptionText) {
-      replyText += `\n\n📝 *Распознанный текст:*\n_${transcriptionText}_`;
+    if (input.contentType === "voice") {
+      if (transcriptionText) {
+        replyText += `\n\n📝 *Распознанный текст:*\n_${transcriptionText}_`;
+      } else {
+        replyText += `\n\n⚠️ Не удалось распознать речь (аудио длиннее ~30 сек?). Файл сохранён в Drive`;
+      }
     }
 
     await ctx.reply(replyText, { parse_mode: "Markdown", link_preview_options: { is_disabled: true } });
