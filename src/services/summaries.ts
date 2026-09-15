@@ -26,31 +26,9 @@ function errMsg(e: unknown): string {
 
 // ─── Time helpers (TIMEZONE-aware) ──────────────────────────────────────
 
-function tzOffsetMinutes(zone: string, at: Date): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: zone,
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).formatToParts(at);
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
-  const asUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour") % 24, get("minute"), get("second"));
-  return (asUtc - at.getTime()) / 60_000;
-}
-
 /** Локальная дата в TIMEZONE как YYYY-MM-DD. */
 function todayYmd(): string {
   return new Date().toLocaleDateString("sv-SE", { timeZone: tz() });
-}
-
-/** Полночь сегодняшнего дня в TIMEZONE как инстант. */
-function startOfTodayInTz(): Date {
-  const guess = new Date(`${todayYmd()}T00:00:00Z`);
-  return new Date(guess.getTime() - tzOffsetMinutes(tz(), guess) * 60_000);
 }
 
 function isOverdue(t: TodoistTask): boolean {
@@ -170,7 +148,9 @@ export async function sendEveningSummary(bot: Telegraf): Promise<void> {
   let open: TodoistTask[] = [];
   let todoistError: string | null = null;
   try {
-    completed = await getCompletedBetween(startOfTodayInTz(), new Date());
+    // Окно запрашивается по датам в TIMEZONE, поэтому «сегодня» — один и тот же день с обеих сторон.
+    const today = new Date();
+    completed = await getCompletedBetween(today, today);
     open = await findTasks("today");
   } catch (e) {
     todoistError = errMsg(e);

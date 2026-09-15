@@ -109,16 +109,26 @@ export async function findTasks(filter: string, limit = 30): Promise<TodoistTask
   return Array.isArray(data) ? data : data.results ?? [];
 }
 
+/** Дата в TIMEZONE как YYYY-MM-DD (локаль sv-SE даёт ISO-порядок). */
+function ymdInTz(d: Date): string {
+  return d.toLocaleDateString("sv-SE", { timeZone: process.env.TIMEZONE ?? "Europe/Oslo" });
+}
+
 /**
  * Закрытые задачи за интервал (по дате закрытия). Для вечерней сводки.
- * v1: GET /tasks/completed/by_completion_date?since=&until= → { items, next_cursor }.
- * Формат ответа не проверен живым запросом при написании (в среде сборки нет
- * токена), поэтому принимаем `items`, `results` и голый массив.
+ * v1: GET /tasks/completed/by_completion_date?since=&until=
+ *
+ * since/until — даты YYYY-MM-DD, не таймстемпы: официальный Todoist-коннектор
+ * принимает для этих параметров только такой формат. Границы считаются в
+ * TIMEZONE, иначе около полуночи запрос ушёл бы за UTC-сутки.
+ *
+ * Форму ответа живым запросом не проверяли (в среде сборки нет токена),
+ * поэтому принимаем `items`, `results` и голый массив.
  */
 export async function getCompletedBetween(since: Date, until: Date, limit = 50): Promise<TodoistTask[]> {
   const q = new URLSearchParams({
-    since: since.toISOString(),
-    until: until.toISOString(),
+    since: ymdInTz(since),
+    until: ymdInTz(until),
     limit: String(limit),
   });
   const data = await call<{ items?: TodoistTask[]; results?: TodoistTask[] } | TodoistTask[]>(
