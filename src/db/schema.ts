@@ -108,32 +108,6 @@ export type NewWebUser = typeof webUsers.$inferInsert;
 export type DocumentChunk = typeof documentChunks.$inferSelect;
 export type NewDocumentChunk = typeof documentChunks.$inferInsert;
 
-// ─── tasks table (task manager) ──────────────────────────────────────
-export const tasks = pgTable(
-  "tasks",
-  {
-    id: uuid("id").defaultRandom().primaryKey(),
-    userId: uuid("user_id").notNull(),
-    title: varchar("title", { length: 255 }).notNull(),
-    description: text("description"),
-    status: varchar("status", { length: 32 }).notNull().default("todo"),
-    priority: varchar("priority", { length: 16 }).notNull().default("medium"),
-    dueDate: timestamp("due_date", { withTimezone: true }),
-    source: varchar("source", { length: 16 }).notNull().default("web"),
-    rawMessage: text("raw_message"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-    notifiedAt: timestamp("notified_at", { withTimezone: true }),
-  },
-  (table) => ({
-    userIdIdx: index("tasks_user_id_idx").on(table.userId),
-    statusIdx: index("tasks_status_idx").on(table.status),
-    dueDateIdx: index("tasks_due_date_idx").on(table.dueDate),
-  })
-);
-export type Task = typeof tasks.$inferSelect;
-export type NewTask = typeof tasks.$inferInsert;
-
 // ─── linked_accounts table (OAuth providers) ─────────────────────────
 export const linkedAccounts = pgTable(
   "linked_accounts",

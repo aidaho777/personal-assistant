@@ -1,131 +1,119 @@
-# 🤖 Collector Bot — Этап 0
+# 🤖 Personal Assistant
 
-Telegram-бот для сбора материалов (файлы, фото, голосовые, текст) и структурированной загрузки в Google Drive.
+Telegram-бот — единственная точка захвата. Задачи уходят в **Todoist**, всё остальное (файлы, фото, голосовые, заметки) — в **Google Drive** и в RAG-индекс. Дважды в день бот сам присылает сводку с кнопками.
 
-**Стек:** TypeScript · Next.js 14 (App Router) · Telegraf · Google Drive API v3 · Drizzle ORM · PostgreSQL (Railway)
+**Стек:** TypeScript · Next.js 14 (App Router) · Telegraf · OpenAI · Todoist API v1 · Google Drive API v3 · Yandex SpeechKit · Drizzle ORM · PostgreSQL (Railway) · pgvector
 
 ---
 
-## 📁 Структура проекта
+## 🧭 Как это работает
 
 ```
-collector/
+                  ┌─────────────────────────────────────────┐
+   Telegram ──────▶  LLM-роутер (gpt-4o-mini, tool-calling)  │
+  текст/голос      └───────────────┬─────────────┬───────────┘
+                                   │             │
+                          create_tasks       save_note
+                                   │             │
+                                   ▼             ▼
+                              Todoist      Google Drive
+                           (+напоминания)   + pgvector RAG
+                                   │
+                    09:00 / 21:00 сводки с кнопками
+                          ✅ · 📅 завтра · 🕐 +2ч
+```
+
+- **Текст и голос идут одним путём.** Голосовое сначала распознаётся SpeechKit, дальше расшифровка обрабатывается ровно как текст. `.ogg` и `.txt` всё равно ложатся в Drive, расшифровка — в `uploads.transcription`.
+- **Даты не парсятся в коде.** Роутер отдаёт срок сырой русской фразой («завтра в 10», «каждый понедельник»), Todoist разбирает её сам (`due_string` + `due_lang: "ru"`).
+- **Одно сообщение — несколько задач.** «Купить молоко, и ещё в пятницу отправить отчёт» → две отдельные задачи.
+- **Не задача — заметка.** Мысль без действия уходит в Drive и в RAG-индекс, задача не создаётся.
+- **Хештег = проект.** `#Ремонт` → задача в проект «Ремонт», если имя совпало точно; иначе Inbox.
+
+Веб-часть (Vercel) осталась только для auth, RAG-чата и загрузки документов. Канбана задач больше нет — интерфейс задач это Todoist.
+
+---
+
+## 📁 Структура
+
+```
 ├── src/
 │   ├── app/
-│   │   ├── api/
-│   │   │   ├── telegram/webhook/route.ts   # Telegram webhook endpoint
-│   │   │   └── health/route.ts             # Health check API
-│   │   ├── layout.tsx
-│   │   └── page.tsx                        # Placeholder для дашборда
+│   │   ├── api/            # auth, chat, rag, telegram/webhook, health, user
+│   │   └── dashboard/      # Dashboard · AI Chat · Settings
 │   ├── db/
-│   │   ├── schema.ts                       # Drizzle schema (users + uploads)
-│   │   └── index.ts                        # DB connection singleton
-│   ├── lib/
-│   │   ├── env.ts                          # Env validation
-│   │   └── helpers.ts                      # Tags, naming, hashing, MIME
+│   │   ├── schema.ts       # users · uploads · web_users · document_chunks · linked_accounts
+│   │   └── index.ts        # DB singleton (ленивый)
+│   ├── lib/                # env, helpers, fetch-with-retry
 │   └── services/
-│       ├── bot.ts                          # Telegraf bot: commands + handlers
-│       ├── google-drive.ts                 # Drive: folders, upload, health
-│       ├── upload-service.ts               # Upload journal CRUD + stats
-│       └── user-service.ts                 # Auth / whitelist
+│       ├── bot.ts              # Telegraf: команды, хендлеры, callback-кнопки
+│       ├── message-router.ts   # LLM-роутер: create_tasks | save_note
+│       ├── todoist.ts          # Todoist API v1
+│       ├── summaries.ts        # Утренняя и вечерняя сводки
+│       ├── yandex-speechkit.ts # Распознавание речи
+│       ├── google-drive.ts     # Папки, загрузка, health
+│       ├── document-indexer.ts # Чанки + эмбеддинги (RAG)
+│       └── upload-service.ts   # Журнал загрузок + статистика
 ├── scripts/
-│   ├── set-webhook.ts                      # Register Telegram webhook
-│   └── seed.ts                             # Add admin user to whitelist
-├── drizzle.config.ts
-├── next.config.js
-├── package.json
-├── tsconfig.json
-└── .env.example
+│   ├── polling.ts                  # Рантайм бота (Railway) + cron сводок
+│   ├── todoist-smoke.ts            # Проверка связи с Todoist
+│   ├── migrate-tasks-to-todoist.ts # Одноразовый перенос старых задач
+│   └── set-webhook.ts
+└── drizzle/                # Миграции
 ```
+
+**Два рантайма:** бот живёт на Railway (`scripts/polling.ts`, long polling), веб — на Vercel. Роутер, сводки и cron работают только в polling-процессе.
 
 ---
 
 ## 🚀 Быстрый старт
 
-### 1. Установка зависимостей
-
 ```bash
 npm install
+cp .env.example .env    # заполнить
+npm run db:migrate
+ADMIN_TELEGRAM_ID=123456789 ADMIN_USERNAME=your_username npx tsx scripts/seed.ts
 ```
 
-### 2. Настройка переменных окружения
-
-Скопируйте `.env.example` → `.env` и заполните:
-
-```bash
-cp .env.example .env
-```
+### Переменные окружения
 
 | Переменная | Описание |
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Токен от @BotFather |
-| `TELEGRAM_WEBHOOK_SECRET` | Произвольная строка для верификации вебхуков |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | JSON-ключ Service Account (целиком, в одну строку) |
+| `TELEGRAM_WEBHOOK_SECRET` | Строка для верификации вебхуков |
+| `TODOIST_API_TOKEN` | Todoist → Settings → Integrations → Developer |
+| `TIMEZONE` | Часовой пояс сводок, по умолчанию `Europe/Oslo` |
+| `OPENAI_API_KEY` | Роутер (gpt-4o-mini) и эмбеддинги |
+| `YANDEX_CLOUD_API_KEY` / `YANDEX_CLOUD_FOLDER_ID` | SpeechKit. Без них голос просто ляжет файлом |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | JSON-ключ Service Account (в одну строку) |
 | `GOOGLE_DRIVE_ROOT_FOLDER_ID` | ID корневой папки на Drive |
 | `DATABASE_URL` | PostgreSQL connection string |
-| `NEXT_PUBLIC_APP_URL` | URL деплоя (например `https://collector.vercel.app`) |
+| `NEXTAUTH_SECRET` / `NEXTAUTH_URL` | Веб-авторизация |
+| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | Google-вход в дашборд |
 
-### 3. Настройка Google Drive
+### Google Drive
 
-1. Создайте проект в [Google Cloud Console](https://console.cloud.google.com)
-2. Включите **Google Drive API**
-3. Создайте **Service Account** → скачайте JSON-ключ
-4. Создайте корневую папку на Google Drive (напр. `AI_Collector_Root`)
-5. Расшарьте папку на email Service Account с правами **Editor**
-6. Скопируйте ID папки из URL → в `GOOGLE_DRIVE_ROOT_FOLDER_ID`
+1. Проект в [Google Cloud Console](https://console.cloud.google.com) → включить **Google Drive API**
+2. **Service Account** → скачать JSON-ключ
+3. Создать корневую папку на Drive, расшарить на email Service Account с правами **Editor**
+4. ID папки из URL → `GOOGLE_DRIVE_ROOT_FOLDER_ID`
 
-### 4. Инициализация базы данных
+### Todoist
 
-```bash
-# Создать/обновить таблицы
-npm run db:push
-
-# Добавить админа в whitelist
-ADMIN_TELEGRAM_ID=123456789 ADMIN_USERNAME=your_username npx tsx scripts/seed.ts
-```
-
-### 5. Запуск локально
+Токен: Todoist → Settings → Integrations → Developer → API token. Проверка связи:
 
 ```bash
-npm run dev
-```
-
-Для локальной разработки используйте [ngrok](https://ngrok.com) для туннеля:
-
-```bash
-ngrok http 3000
-# Скопируйте HTTPS URL → NEXT_PUBLIC_APP_URL
-```
-
-### 6. Регистрация вебхука
-
-```bash
-npm run set-webhook
+npx tsx scripts/todoist-smoke.ts   # создаёт задачу и сразу закрывает её
 ```
 
 ---
 
 ## 🚢 Деплой
 
-### Vercel (Next.js)
-
-1. Подключите репозиторий к Vercel
-2. Добавьте все переменные из `.env` в Settings → Environment Variables
-3. Деплой произойдёт автоматически
-
-### Railway (PostgreSQL)
-
-1. Создайте проект → Add PostgreSQL
-2. Скопируйте `DATABASE_URL` из Variables
-
-### После деплоя
+- **Railway** — бот и PostgreSQL. `npm start` поднимает polling-процесс.
+- **Vercel** — веб-часть. Переменные из `.env` в Settings → Environment Variables.
 
 ```bash
-# Применить миграции к Railway DB
-npm run db:push
-
-# Зарегистрировать вебхук на Vercel URL
-npm run set-webhook
+npm run db:migrate   # применить миграции
 ```
 
 ---
@@ -136,18 +124,28 @@ npm run set-webhook
 |---|---|
 | `/start` | Приветствие и инструкция |
 | `/help` | Справка по форматам и тегам |
+| `/tasks` | Задачи на сегодня + просроченные (Todoist) |
+| `/upcoming` | Задачи на ближайшие 2 дня (Todoist) |
 | `/status` | Проверка БД и Google Drive |
 | `/stats` | Статистика: всего, сегодня, топ теги |
 | `/list [тег]` | Последние 5 файлов (+ фильтр по тегу) |
+
+### Сводки
+
+| Когда | Что | Кнопки |
+|---|---|---|
+| 09:00 | Задачи на сегодня + просроченные, число вчерашних записей | ✅ · 📅 завтра · 🕐 +2ч |
+| 21:00 | Закрытое за день + открытое с дедлайном сегодня | 📅 завтра · 📅 понедельник · ❌ снять |
+
+Утренняя приходит всегда, даже когда задач нет. Время — по `TIMEZONE`.
 
 ---
 
 ## 🏷 Тегирование
 
-- Добавьте `#ИмяТега` в подпись файла или текст сообщения
-- Файл сохранится в подпапку `ИмяТега` на Drive
-- Без тега → папка `Inbox`
-- Несколько тегов → используется первый
+- `#ИмяТега` в подписи файла или тексте → подпапка `ИмяТега` на Drive
+- Если имя тега точно совпадает с проектом Todoist, задача уедет в этот проект
+- Без тега → `Inbox`. Несколько тегов → берётся первый
 
 ---
 
@@ -163,9 +161,11 @@ npm run set-webhook
 ## 🧪 NPM-скрипты
 
 ```bash
-npm run dev          # Локальный сервер Next.js
-npm run build        # Production build
-npm run db:push      # Применить схему к БД
-npm run db:studio    # Drizzle Studio (GUI для БД)
-npm run set-webhook  # Зарегистрировать Telegram webhook
+npm run dev            # Локальный Next.js
+npm run build          # Production build (web + polling)
+npm run start:polling  # Бот локально
+npm run db:generate    # Сгенерировать миграцию из схемы
+npm run db:migrate     # Применить миграции
+npm run db:studio      # Drizzle Studio
+npm run set-webhook    # Зарегистрировать Telegram webhook
 ```

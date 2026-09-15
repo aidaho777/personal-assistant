@@ -1,6 +1,7 @@
 /**
  * Todoist API v1 client.
- * Заменяет собой таблицу `tasks`, deadline-checker и веб-канбан.
+ * Todoist — хранилище задач, напоминания и интерфейс. Своей таблицы задач,
+ * планировщика дедлайнов и веб-канбана в проекте больше нет.
  *
  * ENV: TODOIST_API_TOKEN (Settings → Integrations → Developer)
  */
