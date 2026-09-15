@@ -118,12 +118,15 @@ function ymdInTz(d: Date): string {
  * Закрытые задачи за интервал (по дате закрытия). Для вечерней сводки.
  * v1: GET /tasks/completed/by_completion_date?since=&until=
  *
- * since/until — даты YYYY-MM-DD, не таймстемпы: официальный Todoist-коннектор
- * принимает для этих параметров только такой формат. Границы считаются в
- * TIMEZONE, иначе около полуночи запрос ушёл бы за UTC-сутки.
+ * since/until — даты YYYY-MM-DD, не таймстемпы (по документации v1). Границы
+ * считаются в TIMEZONE, иначе около полуночи запрос ушёл бы за UTC-сутки.
  *
- * Форму ответа живым запросом не проверяли (в среде сборки нет токена),
- * поэтому принимаем `items`, `results` и голый массив.
+ * Пагинированные списки v1 отдают { results, next_cursor } — отсюда порядок
+ * веток. `items` и голый массив оставлены страховкой: живым запросом ответ
+ * не проверяли, в среде сборки нет токена.
+ *
+ * Пагинация не читается сознательно: limit=50 закрытых задач за день с
+ * запасом хватает вечерней сводке.
  */
 export async function getCompletedBetween(since: Date, until: Date, limit = 50): Promise<TodoistTask[]> {
   const q = new URLSearchParams({
@@ -131,10 +134,10 @@ export async function getCompletedBetween(since: Date, until: Date, limit = 50):
     until: ymdInTz(until),
     limit: String(limit),
   });
-  const data = await call<{ items?: TodoistTask[]; results?: TodoistTask[] } | TodoistTask[]>(
+  const data = await call<{ results?: TodoistTask[]; items?: TodoistTask[] } | TodoistTask[]>(
     `/tasks/completed/by_completion_date?${q}`
   );
-  return Array.isArray(data) ? data : data.items ?? data.results ?? [];
+  return Array.isArray(data) ? data : data.results ?? data.items ?? [];
 }
 
 export async function completeTask(id: string): Promise<void> {
