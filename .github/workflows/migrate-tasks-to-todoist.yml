@@ -1,0 +1,97 @@
+# Перенос задач из таблицы `tasks` в Todoist и последующий дроп таблицы.
+#
+# Запускается только вручную (workflow_dispatch). Рассчитан на ДВА прогона:
+#
+#   Прогон 1 — перенос:  migrate_tasks = true,  drop_table = (пусто)
+#              Смотрим в логе число перенесённых, проверяем в Todoist
+#              фильтр @migrated.
+#   Прогон 2 — дроп:     migrate_tasks = false, drop_table = DROP TASKS
+#
+# Второй прогон с migrate_tasks = true создаст ДУБЛИ в Todoist: скрипт
+# только добавляет задачи и ничего не помечает как перенесённое.
+#
+# Секреты (Settings → Secrets and variables → Actions → Secrets):
+#   DATABASE_URL       ← значение Railway DATABASE_PUBLIC_URL, НЕ DATABASE_URL.
+#                        Внутренний хост *.railway.internal из раннеров
+#                        GitHub недоступен.
+#   TODOIST_API_TOKEN  ← Todoist → Settings → Integrations → Developer
+# Переменная (вкладка Variables, необязательно):
+#   TIMEZONE           ← по умолчанию Europe/Oslo
+name: Migrate tasks to Todoist
+
+on:
+  workflow_dispatch:
+    inputs:
+      migrate_tasks:
+        description: "Перенести открытые задачи в Todoist (метка migrated)"
+        type: boolean
+        default: true
+      drop_table:
+        description: "Дроп таблицы tasks: впечатать DROP TASKS. Пусто — не дропать."
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migrate-tasks-to-todoist
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Подтверждение проверяем ДО переноса, чтобы опечатка в drop_table
+      # не всплыла уже после создания задач в Todoist.
+      - name: Проверить подтверждение дропа
+        if: inputs.drop_table != ''
+        env:
+          CONFIRM: ${{ inputs.drop_table }}
+        run: |
+          if [ "$CONFIRM" != "DROP TASKS" ]; then
+            echo "::error::Для дропа нужно точное подтверждение: DROP TASKS"
+            exit 1
+          fi
+          echo "Подтверждение принято."
+
+      - name: Перенести открытые задачи в Todoist
+        if: inputs.migrate_tasks
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TODOIST_API_TOKEN: ${{ secrets.TODOIST_API_TOKEN }}
+          TIMEZONE: ${{ vars.TIMEZONE || 'Europe/Oslo' }}
+        run: npx tsx scripts/migrate-tasks-to-todoist.ts
+
+      # drizzle-kit migrate применит 0000 (идемпотентный: CREATE TABLE/INDEX
+      # IF NOT EXISTS, внешние ключи в DO-блоках) и затем 0001 — DROP TABLE tasks.
+      - name: Применить миграции (дропает tasks)
+        if: inputs.drop_table == 'DROP TASKS'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: npm run db:migrate
+
+      - name: Итог
+        if: always()
+        env:
+          MIGRATED: ${{ inputs.migrate_tasks }}
+          DROPPED: ${{ inputs.drop_table == 'DROP TASKS' }}
+        run: |
+          {
+            echo "### Результат"
+            echo ""
+            echo "| Шаг | Выполнен |"
+            echo "|---|---|"
+            echo "| Перенос задач в Todoist | $MIGRATED |"
+            echo "| Дроп таблицы tasks | $DROPPED |"
+          } >> "$GITHUB_STEP_SUMMARY"
