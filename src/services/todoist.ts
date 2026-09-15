@@ -108,6 +108,24 @@ export async function findTasks(filter: string, limit = 30): Promise<TodoistTask
   return Array.isArray(data) ? data : data.results ?? [];
 }
 
+/**
+ * Закрытые задачи за интервал (по дате закрытия). Для вечерней сводки.
+ * v1: GET /tasks/completed/by_completion_date?since=&until= → { items, next_cursor }.
+ * Формат ответа не проверен живым запросом при написании (в среде сборки нет
+ * токена), поэтому принимаем `items`, `results` и голый массив.
+ */
+export async function getCompletedBetween(since: Date, until: Date, limit = 50): Promise<TodoistTask[]> {
+  const q = new URLSearchParams({
+    since: since.toISOString(),
+    until: until.toISOString(),
+    limit: String(limit),
+  });
+  const data = await call<{ items?: TodoistTask[]; results?: TodoistTask[] } | TodoistTask[]>(
+    `/tasks/completed/by_completion_date?${q}`
+  );
+  return Array.isArray(data) ? data : data.items ?? data.results ?? [];
+}
+
 export async function completeTask(id: string): Promise<void> {
   await call(`/tasks/${id}/close`, { method: "POST" });
 }

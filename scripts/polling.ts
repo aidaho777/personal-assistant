@@ -6,11 +6,33 @@
  * Usage: npx tsx scripts/polling.ts
  */
 import "dotenv/config";
+import cron from "node-cron";
 import { getBot } from "../src/services/bot";
 import { checkDeadlines } from "../src/services/deadline-checker";
+import { sendMorningSummary, sendEveningSummary } from "../src/services/summaries";
 
 const MAX_RETRIES = 10;
 const RETRY_DELAY_MS = 10_000; // 10 seconds between retries
+
+// Сводки: 09:00 и 21:00 по TIMEZONE. Guard — startPolling может вызываться
+// повторно при 409, задания должны создаваться ровно один раз.
+let cronStarted = false;
+function startCron(bot: ReturnType<typeof getBot>): void {
+  if (cronStarted) return;
+  cronStarted = true;
+  const timezone = process.env.TIMEZONE ?? "Europe/Oslo";
+  cron.schedule(
+    "0 9 * * *",
+    () => { sendMorningSummary(bot).catch((e) => console.error("[Summary] morning failed:", e)); },
+    { timezone }
+  );
+  cron.schedule(
+    "0 21 * * *",
+    () => { sendEveningSummary(bot).catch((e) => console.error("[Summary] evening failed:", e)); },
+    { timezone }
+  );
+  console.log(`[Cron] Summaries scheduled: 09:00 and 21:00 (${timezone})`);
+}
 
 async function startPolling(attempt = 1): Promise<void> {
   const bot = getBot();
@@ -34,6 +56,7 @@ async function startPolling(attempt = 1): Promise<void> {
   try {
     await bot.launch({ dropPendingUpdates: true });
     console.log("✅ Bot is running and polling for updates!");
+    startCron(bot);
 
     // Deadline checker — every 30 minutes
     console.log("[Bot] Starting deadline checker (every 30 min)...");

@@ -1,5 +1,5 @@
 import { Telegraf, Context } from "telegraf";
-import { message } from "telegraf/filters";
+import { message, callbackQuery } from "telegraf/filters";
 import { env } from "../lib/env";
 import { getAuthorizedUser, checkDbConnection } from "./user-service";
 import {
@@ -24,7 +24,7 @@ import {
 } from "../lib/helpers";
 import { recognizeSpeech } from "./yandex-speechkit";
 import { routeMessage, type RoutedTask } from "./message-router";
-import { createTask, findTasks, listProjects, taskUrl, formatTask } from "./todoist";
+import { createTask, findTasks, listProjects, taskUrl, formatTask, completeTask, rescheduleTask } from "./todoist";
 import type { User } from "../db/schema";
 
 // ─── Todoist helpers ───────────────────────────────────────────────────────
@@ -241,6 +241,48 @@ function registerHandlers(bot: Telegraf) {
     } catch (e) {
       console.error("[Bot] /upcoming error:", e);
       await ctx.reply("❌ Todoist недоступен. Попробуйте позже.");
+    }
+  });
+
+  // ── Inline buttons from summaries (done / tmrw / plus2h / mon / drop) ──
+  bot.on(callbackQuery("data"), async (ctx) => {
+    const [action, id] = ctx.callbackQuery.data.split(":");
+    if (!id) {
+      await ctx.answerCbQuery();
+      return;
+    }
+
+    const ACTIONS: Record<string, { run: () => Promise<unknown>; toast: string; mark: string }> = {
+      done: { run: () => completeTask(id), toast: "Закрыто ✅", mark: "✅" },
+      tmrw: { run: () => rescheduleTask(id, "завтра"), toast: "Перенесено 📅", mark: "📅 завтра ·" },
+      plus2h: { run: () => rescheduleTask(id, "через 2 часа"), toast: "Перенесено 🕐", mark: "🕐 +2ч ·" },
+      mon: { run: () => rescheduleTask(id, "в понедельник"), toast: "Перенесено 📅", mark: "📅 понедельник ·" },
+      drop: { run: () => completeTask(id), toast: "Снята ❌", mark: "❌ снята ·" },
+    };
+    const a = ACTIONS[action];
+    if (!a) {
+      await ctx.answerCbQuery();
+      return;
+    }
+
+    try {
+      await a.run();
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      console.error("[Bot] callback error:", action, id, m);
+      await ctx.answerCbQuery(`Ошибка: ${m}`.slice(0, 200), { show_alert: true });
+      return;
+    }
+
+    await ctx.answerCbQuery(a.toast);
+    const msg = ctx.callbackQuery.message;
+    if (msg && "text" in msg) {
+      try {
+        // без reply_markup → клавиатура снимается
+        await ctx.editMessageText(`${a.mark} ${msg.text}`);
+      } catch (e) {
+        console.error("[Bot] editMessageText failed:", e);
+      }
     }
   });
 
